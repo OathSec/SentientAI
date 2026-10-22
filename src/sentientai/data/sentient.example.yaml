@@ -1,0 +1,137 @@
+# SentientAI configuration
+# -----------------------------------------------------------------------------
+# Every key can also be set from the environment: SENTIENT_<SECTION>__<KEY>,
+# e.g. SENTIENT_STORAGE__DATABASE_URL or SENTIENT_API__AUTH_TOKEN.
+# Environment variables override this file. Run `sentientai -c sentient.yaml doctor`
+# after editing to check every subsystem.
+
+identity:
+  name: Sentient
+  purpose: >-
+    A persistent, local cognitive system that learns continuously, helps its operator,
+    and improves itself under human supervision.
+  # values: [...]          # override the default value list if you like
+
+# -----------------------------------------------------------------------------
+# Models. Any OpenAI-compatible server works: llama.cpp `llama-server`, vLLM,
+# Ollama (base_url http://host:11434/v1), LM Studio, TGI.
+#
+# Reference hardware (see docs/hardware.md):
+#   heavy  -> 2x Radeon Pro V340 = 4 Vega 10 GPUs x 16 GB (gfx900). Current ROCm and vLLM
+#             do not support gfx900, so serve with llama.cpp (Vulkan backend, or HIP built
+#             with AMDGPU_TARGETS=gfx900), splitting layers across all four GPUs.
+#   fast   -> GTX 1660 Ti (6 GB, CUDA): an 8B model at Q4_K_M, or 3-4B with embeddings alongside.
+models:
+  heavy:
+    base_url: http://127.0.0.1:8000/v1
+    model: heavy            # llama-server serves whatever GGUF it loaded; the name is informational
+    context_window: 16384
+    max_output_tokens: 2048
+    temperature: 0.3
+    timeout_s: 600
+    supports_tools: true    # set false if the server/chat template lacks native tool calling
+    device: "vulkan:0-3 (2x Radeon Pro V340)"
+  fast:
+    base_url: http://127.0.0.1:8002/v1
+    model: fast
+    context_window: 8192
+    max_output_tokens: 1024
+    temperature: 0.2
+    timeout_s: 180
+    supports_tools: true
+    device: "cuda:0 (GTX 1660 Ti)"
+  embedding:
+    provider: openai        # "hashing" = offline lexical fallback (no server needed)
+    base_url: http://127.0.0.1:8001/v1
+    model: nomic-embed-text-v1.5
+    dimensions: 768         # must match the model; changing it requires `sentientai memory reindex`
+    query_prefix: "search_query: "        # nomic/e5/bge-style task prefixes ("" for symmetric models)
+    document_prefix: "search_document: "
+  routing:
+    heavy_task_kinds: [reason, code, plan, chat, improve]
+    fast_task_kinds: [route, summarize, extract, classify, reflect, assess]
+    escalate_below_confidence: 0.45   # low-confidence fast answers are re-checked by the heavy model
+    fallback_to_other_tier: true
+
+# -----------------------------------------------------------------------------
+# Storage tiers. Defaults (all commented out) run fully embedded: SQLite + an
+# on-disk numpy vector index + in-process working memory.
+storage:
+  data_dir: ./data                                   # fast NVMe: DB files, vector index, audit
+  # database_url: postgresql+asyncpg://sentient:sentient@127.0.0.1:5432/sentientai
+  # redis_url: redis://127.0.0.1:6379/0              # short-term working memory
+  # vector_backend: pgvector                         # memory | pgvector | qdrant
+  # qdrant_url: http://127.0.0.1:6333
+  # archive_dir: /mnt/hdd/sentientai/archive         # mass HDD tier for raw ingested documents
+
+memory:
+  recall_k: 8
+  decay_half_life_days: 30        # unused, unimportant memories fade on this timescale
+  pin_importance: 0.9             # memories at or above this importance never decay away
+  consolidation_interval_s: 1800  # background "sleep": summarize, extract facts, decay
+
+# -----------------------------------------------------------------------------
+# Deterministic loop breakers: every run is bounded by all of these.
+limits:
+  max_steps: 24
+  max_tool_calls: 48
+  max_wall_time_s: 900
+  max_repeat_calls: 3
+  max_consecutive_failures: 4
+  max_tokens_per_task: 250000
+  llm_requests_per_minute: 120
+
+sandbox:
+  backend: docker          # docker | local_unsafe (every run needs approval) | disabled
+  image: python:3.12-slim  # or build deploy/sandbox/Dockerfile for a richer toolset
+  memory: 1g
+  cpus: 2
+  network: false
+  timeout_s: 120
+
+web:
+  search_backend: duckduckgo   # duckduckgo | searxng | disabled
+  # searxng_url: http://127.0.0.1:8888
+  allow_private_networks: false
+  # credentials:                 # injected by name; the model never sees the values
+  #   github: {Authorization: "Bearer ghp_..."}
+
+safety:
+  auto_approve_max_risk: medium             # operator-initiated work: workspace writes allowed
+  autonomous_auto_approve_max_risk: low     # self-initiated work: sandboxed/read-only only
+  deny_min_risk: critical                   # destructive actions are refused outright
+  approval_timeout_s: 900
+  workspace_roots: [./workspace]            # the only directories file tools can touch
+  # audit_hmac_key: change-me               # keyed audit chain (recommended in production)
+  # kill_switch_file: /run/sentientai/KILL  # touch this file (or press a wired button) to stop
+
+runtime:
+  autonomy: reactive        # reactive: act on requests only | proactive: also pursue goals & think when idle
+  idle_think_interval_s: 900
+  max_concurrent_tasks: 1   # one GPU-heavy task at a time
+  schedules:
+    - name: morning-review
+      cron: "30 8 * * 1-5"
+      prompt: "Review yesterday's episodes and memory, then write a short status note to notes/daily.md."
+      enabled: false
+  watchers:
+    - name: inbox
+      path: ./workspace/inbox
+      pattern: "*"
+      action: ingest          # ingest | task
+      interval_s: 30
+
+api:
+  host: 127.0.0.1
+  port: 8765
+  # auth_token: change-me     # required before binding to a non-loopback address
+
+self_improvement:
+  enabled: false
+  source_root: .
+  test_command: [python, -m, pytest, -q, -x]
+  # staging_image: sentientai-staging:latest   # run staged tests in a network-less container
+
+logging:
+  level: INFO
+  format: console            # console | json
