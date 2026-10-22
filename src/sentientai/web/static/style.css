@@ -101,7 +101,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .notice.error { border-color: var(--warn); color: var(--warn); }
 
 /* the chat page fills the screen: only the message list scrolls, never the page */
-body.fill { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+html:has(body.fill) { height: 100%; overflow: hidden; }
+body.fill { position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
+body.fill > header.top { flex: none; }
 body.fill > main { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; padding-bottom: 0; }
 body.fill #log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .chatbar { display: flex; align-items: center; gap: 0.5rem; padding: 0 0 0.4rem; }
