@@ -6,7 +6,7 @@
 # after editing to check every subsystem.
 
 identity:
-  name: Sentient
+  name: Fuzzy
   purpose: >-
     A persistent, local cognitive system that learns continuously, helps its operator,
     and improves itself under human supervision.

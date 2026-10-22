@@ -73,7 +73,7 @@ async def test_chat_tasks_and_state(stack: tuple[Runtime, httpx.AsyncClient, Bra
     assert (await client.get("/v1/tasks/nope")).status_code == 404
 
     state = (await client.get("/v1/state")).json()
-    assert state["name"] == "Sentient" and state["track_record"]["succeeded"] >= 2
+    assert state["name"] == "Fuzzy" and state["track_record"]["succeeded"] >= 2
     tools = (await client.get("/v1/tools")).json()
     assert {"fs_read", "memory_recall", "goal_add"} <= {t["name"] for t in tools}
 
@@ -215,7 +215,7 @@ async def test_real_server_cli_and_events(tmp_path: Path) -> None:
         assert {"task.submitted", "task.started", "task.finished"} <= {e["type"] for e in events}
 
         state = await asyncio.to_thread(cli, "state")
-        assert json.loads(state.output)["name"] == "Sentient"
+        assert json.loads(state.output)["name"] == "Fuzzy"
         tasks = await asyncio.to_thread(cli, "tasks")
         assert "succeeded" in tasks.output
         remembered = await asyncio.to_thread(

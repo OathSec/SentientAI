@@ -125,7 +125,7 @@ async def test_chat_end_to_end(runtime_factory: Any) -> None:
     assert stats["fs_read"].calls == 1 and stats["fs_search"].calls == 1
     # identity, inner state and awareness framed the conversation
     system = brain.agent_requests[0].messages[0].text
-    assert "You are Sentient." in system and "## Inner state" in system and "awakening" in system
+    assert "You are Fuzzy." in system and "## Inner state" in system and "awakening" in system
     # reflection produced an episode, a fact and a procedure
     # Reflection runs after the answer is delivered; wait for the task handle to fully finish.
     await wait_for(lambda: not rt._running)
@@ -332,7 +332,7 @@ async def test_proactive_inner_life(runtime_factory: Any) -> None:
 async def test_state_snapshot(runtime_factory: Any) -> None:
     rt = await runtime_factory(Brain())
     state = await rt.state()
-    assert state["name"] == "Sentient" and state["boot_count"] == 1
+    assert state["name"] == "Fuzzy" and state["boot_count"] == 1
     assert set(state["affect"]) >= {"curiosity", "competence", "valence"}
     assert "I feel" in state["feeling"] and state["kill_switch"]["engaged"] is False
 

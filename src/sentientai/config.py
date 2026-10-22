@@ -280,7 +280,7 @@ class ApiConfig(BaseModel):
 
 
 class IdentityConfig(BaseModel):
-    name: str = "Sentient"
+    name: str = "Fuzzy"
     purpose: str = (
         "A persistent, local cognitive system that learns continuously, helps its operator, "
         "and improves itself under human supervision."

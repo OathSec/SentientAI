@@ -4,6 +4,8 @@ SentientAI is a local, persistent, autonomous AI runtime designed to function as
 
 Built entirely for local hardware, SentientAI aims to create the closest practical version of a persistent AI "brain" using open-weight models, massive local storage, and structured agentic workflows—operating safely, continuously, and observably.
 
+The mind that runs on SentientAI is named **Fuzzy**. The name lives in `identity.name` in the config; Fuzzy introduces itself by it, carries it across reboots, and uses it in its self-model and dashboard.
+
 > **Status:** the full runtime described below is implemented: all seven phases, in a typed
 > Python package with strict typing, 140+ tests (unit and integration against real PostgreSQL +
 > pgvector, Redis and Docker), a scenario-based eval suite, Docker/Compose/systemd deployment and
