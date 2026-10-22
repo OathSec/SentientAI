@@ -1,0 +1,49 @@
+# Always-on SentientAI daemon (bare-metal install).
+#   sudo useradd --system --create-home --home-dir /var/lib/sentientai sentient
+#   sudo -u sentient python3 -m venv /opt/sentientai && sudo /opt/sentientai/bin/pip install 'sentientai[all]'
+#   sudo install -m 0640 -o root -g sentient sentient.yaml /etc/sentientai/sentient.yaml
+#   sudo cp sentientai.service /etc/systemd/system/ && sudo systemctl enable --now sentientai
+#
+# Emergency stop without the API:  sudo systemctl kill -s SIGUSR1 sentientai
+#                             or:  sudo -u sentient touch /var/lib/sentientai/data/KILL
+[Unit]
+Description=SentientAI cognitive runtime
+Documentation=https://github.com/oathsec/sentientai
+After=network-online.target postgresql.service redis-server.service docker.service llama-server@heavy.service llama-server@fast.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=sentient
+Group=sentient
+SupplementaryGroups=docker
+WorkingDirectory=/var/lib/sentientai
+Environment=SENTIENT_CONFIG=/etc/sentientai/sentient.yaml
+EnvironmentFile=-/etc/sentientai/secrets.env
+ExecStart=/opt/sentientai/bin/sentientai run
+# SIGTERM drains running tasks (grace period) before checkpointing and exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=always
+RestartSec=5
+# Back off if the daemon crash-loops rather than hammering the GPUs.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/sentientai /srv/sentientai
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+CapabilityBoundingSet=
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

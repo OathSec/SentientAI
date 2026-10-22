@@ -1,0 +1,34 @@
+# llama.cpp model server, one instance per tier:
+#   /etc/sentientai/llama-heavy.env   (Vulkan build, 4 Vega GPUs of 2x Radeon Pro V340)
+#   /etc/sentientai/llama-fast.env    (CUDA build, GTX 1660 Ti)
+#   /etc/sentientai/llama-embed.env   (CUDA build, GTX 1660 Ti, embeddings)
+#   sudo systemctl enable --now llama-server@heavy llama-server@fast llama-server@embed
+#
+# Example /etc/sentientai/llama-heavy.env:
+#   LLAMA_BIN=/opt/llama.cpp-vulkan/bin/llama-server
+#   LLAMA_ARGS=-m /models/Llama-3.3-70B-Instruct-Q4_K_M.gguf --host 127.0.0.1 --port 8000 --n-gpu-layers 999 --split-mode layer --tensor-split 1,1,1,1 --ctx-size 16384 --jinja
+# Example /etc/sentientai/llama-fast.env:
+#   LLAMA_BIN=/opt/llama.cpp-cuda/bin/llama-server
+#   LLAMA_ARGS=-m /models/Qwen3-8B-Q4_K_M.gguf --host 127.0.0.1 --port 8002 --n-gpu-layers 999 --ctx-size 8192 --jinja
+#   CUDA_VISIBLE_DEVICES=0
+[Unit]
+Description=llama.cpp server (%i)
+After=network.target
+
+[Service]
+Type=exec
+User=sentient
+Group=sentient
+SupplementaryGroups=video render
+EnvironmentFile=/etc/sentientai/llama-%i.env
+ExecStart=/bin/sh -c 'exec "$LLAMA_BIN" $LLAMA_ARGS'
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target

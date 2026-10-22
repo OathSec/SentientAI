@@ -1,0 +1,143 @@
+# SentientAI full stack.
+#
+#   cp deploy/.env.example deploy/.env      # set secrets and model paths
+#   docker compose -f deploy/docker-compose.yml up -d                     # runtime + storage
+#   docker compose -f deploy/docker-compose.yml --profile models up -d    # + local model servers
+#   docker compose -f deploy/docker-compose.yml --profile qdrant --profile search up -d
+#
+# Model servers use llama.cpp: Vulkan for the Radeon Pro V340s (gfx900 is not
+# supported by current ROCm/vLLM) and CUDA for the GTX 1660 Ti. See docs/hardware.md.
+
+name: sentientai
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres:
+    <<: *restart
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: sentient
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      POSTGRES_DB: sentientai
+    volumes:
+      - ${SSD_PATH:-/srv/sentientai}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentient -d sentientai"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - ${SSD_PATH:-/srv/sentientai}/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  qdrant:
+    <<: *restart
+    profiles: [qdrant]
+    image: qdrant/qdrant:latest   # pin to the server version matching qdrant-client in production
+    volumes:
+      - ${SSD_PATH:-/srv/sentientai}/qdrant:/qdrant/storage
+
+  searxng:
+    <<: *restart
+    profiles: [search]
+    image: searxng/searxng:latest
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-me}
+    volumes:
+      - ./searxng:/etc/searxng
+
+  sentientai:
+    <<: *restart
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: sentientai:latest
+    user: "${SENTIENT_UID:-1000}:${SENTIENT_GID:-1000}"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    environment:
+      SENTIENT_CONFIG: /config/sentient.yaml
+      # Data and workspace live at the SAME absolute path inside and outside the container:
+      # sandbox containers are started by the host daemon, which resolves bind mounts on the host.
+      SENTIENT_STORAGE__DATA_DIR: ${SSD_PATH:-/srv/sentientai}/data
+      SENTIENT_SAFETY__WORKSPACE_ROOTS: '["${WORKSPACE_PATH:-/srv/sentientai/workspace}"]'
+      HOME: /tmp
+      SENTIENT_STORAGE__DATABASE_URL: postgresql+asyncpg://sentient:${POSTGRES_PASSWORD}@postgres:5432/sentientai
+      SENTIENT_STORAGE__REDIS_URL: redis://redis:6379/0
+      SENTIENT_STORAGE__VECTOR_BACKEND: pgvector
+      SENTIENT_STORAGE__ARCHIVE_DIR: /archive
+      SENTIENT_API__AUTH_TOKEN: ${SENTIENT_API_TOKEN:?set SENTIENT_API_TOKEN in deploy/.env}
+      SENTIENT_SAFETY__AUDIT_HMAC_KEY: ${SENTIENT_AUDIT_KEY:?set SENTIENT_AUDIT_KEY in deploy/.env}
+      SENTIENT_MODELS__HEAVY__BASE_URL: http://llm-heavy:8000/v1
+      SENTIENT_MODELS__FAST__BASE_URL: http://llm-fast:8002/v1
+      SENTIENT_MODELS__EMBEDDING__BASE_URL: http://llm-embed:8001/v1
+    volumes:
+      - ./sentient.yaml:/config/sentient.yaml:ro
+      - ${SSD_PATH:-/srv/sentientai}/data:${SSD_PATH:-/srv/sentientai}/data
+      - ${WORKSPACE_PATH:-/srv/sentientai/workspace}:${WORKSPACE_PATH:-/srv/sentientai/workspace}
+      - ${HDD_PATH:-/srv/sentientai}/archive:/archive
+      # Sandbox: sibling containers via the host daemon. The socket is root-equivalent on
+      # the host; only mount it on a machine dedicated to SentientAI (see Dockerfile).
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - ${DOCKER_GID:-999}
+    ports:
+      - "127.0.0.1:8765:8765"
+
+  # ------------------------------------------------------------ model servers
+  llm-heavy:
+    <<: *restart
+    profiles: [models]
+    image: ghcr.io/ggml-org/llama.cpp:server-vulkan
+    devices:
+      - /dev/dri:/dev/dri
+    group_add: ["${VIDEO_GID:-44}", "${RENDER_GID:-110}"]
+    volumes:
+      - ${MODELS_PATH:-./models}:/models:ro
+    command: >
+      -m /models/${HEAVY_MODEL:-heavy.gguf}
+      --host 0.0.0.0 --port 8000
+      --n-gpu-layers 999 --split-mode layer --tensor-split 1,1,1,1
+      --ctx-size 16384 --jinja --parallel 1
+
+  llm-fast:
+    <<: *restart
+    profiles: [models]
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    volumes:
+      - ${MODELS_PATH:-./models}:/models:ro
+    command: >
+      -m /models/${FAST_MODEL:-fast.gguf}
+      --host 0.0.0.0 --port 8002
+      --n-gpu-layers 999 --ctx-size 8192 --jinja --parallel 2
+
+  llm-embed:
+    <<: *restart
+    profiles: [models]
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    volumes:
+      - ${MODELS_PATH:-./models}:/models:ro
+    command: >
+      -m /models/${EMBED_MODEL:-embed.gguf}
+      --host 0.0.0.0 --port 8001
+      --embedding --n-gpu-layers 999 --ctx-size 8192 --batch-size 8192 --ubatch-size 8192

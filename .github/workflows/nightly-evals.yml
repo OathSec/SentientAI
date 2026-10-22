@@ -1,0 +1,40 @@
+name: Nightly evals (live models)
+
+# Runs the evaluation suite against the real model servers on the GPU host.
+# Requires a self-hosted runner labelled `gpu` with the llama.cpp servers running
+# and the repository secret/variable SENTIENT_EVAL_CONFIG pointing at its config.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Only run scenarios with this tag (optional)
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  live-evals:
+    runs-on: [self-hosted, gpu]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -e ".[all]"
+      - name: Doctor
+        run: .venv/bin/sentientai -c "${{ vars.SENTIENT_EVAL_CONFIG }}" doctor
+      - name: Evaluate
+        run: |
+          TAG_ARGS=""
+          if [ -n "${{ github.event.inputs.tag }}" ]; then TAG_ARGS="--tag ${{ github.event.inputs.tag }}"; fi
+          .venv/bin/sentientai -c "${{ vars.SENTIENT_EVAL_CONFIG }}" eval run $TAG_ARGS \
+            --output "reports/nightly-$(date +%F).json" --min-pass-rate 0.8
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-evals
+          path: reports/
