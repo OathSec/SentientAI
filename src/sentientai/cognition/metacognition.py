@@ -87,7 +87,7 @@ class Metacognition:
                     ],
                     temperature=0.0,
                     json_mode=True,
-                    max_tokens=300,
+                    max_tokens=1000,
                 ),
                 kind=TaskKind.ASSESS,
             )

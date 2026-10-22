@@ -152,3 +152,84 @@ function live(path, onEvent) {
   open();
   return () => { closed = true; if (source) source.close(); };
 }
+
+/* A small, safe Markdown renderer for Fuzzy's replies. It builds DOM nodes with textContent
+   only (never innerHTML), so nothing the model or a person writes can run as script or markup. */
+const Markdown = (function () {
+  const SAFE_URL = /^(https?:\/\/|mailto:|\/media\/)/i;
+  const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*|__[^_\n]+?__)|(\*[^*\s][^*\n]*?\*|(?<![\w])_[^_\s][^_\n]*?_(?![\w]))|(!?\[[^\]\n]*\]\([^)\s]+\))|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
+
+  function inline(text) {
+    const out = document.createDocumentFragment();
+    let last = 0;
+    for (const m of text.matchAll(INLINE)) {
+      if (m.index > last) out.append(document.createTextNode(text.slice(last, m.index)));
+      const token = m[0];
+      if (m[1]) out.append(el("code", {}, token.slice(1, -1)));
+      else if (m[2]) out.append(el("strong", {}, inline(token.slice(2, -2))));
+      else if (m[3]) out.append(el("em", {}, inline(token.slice(1, -1))));
+      else if (m[4]) {
+        const parts = /^(!?)\[([^\]]*)\]\(([^)\s]+)\)$/.exec(token);
+        const url = parts[3];
+        if (parts[1] && url.startsWith("/media/")) out.append(el("img", { src: url, alt: parts[2], loading: "lazy" }));
+        else if (SAFE_URL.test(url)) out.append(el("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, parts[2] || url));
+        else out.append(document.createTextNode(token));
+      } else out.append(el("a", { href: token, target: "_blank", rel: "noopener noreferrer" }, token));
+      last = m.index + token.length;
+    }
+    if (last < text.length) out.append(document.createTextNode(text.slice(last)));
+    return out;
+  }
+
+  function lines(text, container) {
+    const parts = text.split("\n");
+    parts.forEach((line, i) => { if (i) container.append(el("br")); container.append(inline(line)); });
+    return container;
+  }
+
+  function render(source) {
+    const root = el("div", { class: "md" });
+    const rows = String(source || "").replace(/\r\n?/g, "\n").split("\n");
+    let i = 0;
+    const isBlock = (l) => /^(```|#{1,6}\s|>\s?|\s*[-*•]\s+|\s*\d+[.)]\s+|\s*([-*_])\2{2,}\s*$)/.test(l);
+    while (i < rows.length) {
+      const line = rows[i];
+      if (!line.trim()) { i++; continue; }
+      const fence = /^```\s*([\w+-]*)\s*$/.exec(line);
+      if (fence) {
+        const body = [];
+        i++;
+        while (i < rows.length && !/^```\s*$/.test(rows[i])) body.push(rows[i++]);
+        i++;
+        const pre = el("pre", {}, el("code", {}, body.join("\n")));
+        if (fence[1]) pre.dataset.lang = fence[1];
+        root.append(pre);
+        continue;
+      }
+      const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (heading) { root.append(el("p", { class: "md-h" }, inline(heading[2]))); i++; continue; }
+      if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { root.append(el("hr")); i++; continue; }
+      if (/^>\s?/.test(line)) {
+        const quote = [];
+        while (i < rows.length && /^>\s?/.test(rows[i])) quote.push(rows[i++].replace(/^>\s?/, ""));
+        root.append(lines(quote.join("\n"), el("blockquote")));
+        continue;
+      }
+      const bullet = /^\s*[-*•]\s+/, numbered = /^\s*\d+[.)]\s+/;
+      if (bullet.test(line) || numbered.test(line)) {
+        const ordered = numbered.test(line);
+        const list = el(ordered ? "ol" : "ul");
+        const marker = ordered ? numbered : bullet;
+        while (i < rows.length && marker.test(rows[i])) list.append(el("li", {}, inline(rows[i++].replace(marker, ""))));
+        root.append(list);
+        continue;
+      }
+      const para = [line];
+      i++;
+      while (i < rows.length && rows[i].trim() && !isBlock(rows[i])) para.push(rows[i++]);
+      root.append(lines(para.join("\n"), el("p")));
+    }
+    return root;
+  }
+  return { render };
+})();

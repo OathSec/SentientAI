@@ -250,6 +250,22 @@ class AuditLog:
         ]
         return entries[-n:]
 
+    def recent(self, n: int, types: tuple[str, ...]) -> list[AuditEntry]:
+        """The newest ``n`` entries of the given types, reading the newest segments first."""
+
+        found: list[AuditEntry] = []
+        for segment in reversed(self.segments()):
+            with segment.open("r", encoding="utf-8") as fh:
+                batch = [
+                    e
+                    for e in (AuditEntry.model_validate_json(ln) for ln in fh if ln.strip())
+                    if e.type in types
+                ]
+            found = batch + found
+            if len(found) >= n:
+                break
+        return found[-n:]
+
     def verify(self) -> VerifyResult:
         prev = GENESIS
         expected_seq = 0

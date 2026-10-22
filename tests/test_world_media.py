@@ -142,8 +142,10 @@ async def test_avatar_is_designed_and_survives_restart(sqlite_db: Database, tmp_
     )
     assert world.avatar.versions == 2
     await world.walk_to(3, 4)
-    await world.set_action("thinking", "x" * 500)
-    assert len(world.body.thought) == 240
+    await world.set_action("thinking", "x " * 500)
+    assert world.body.thought == " ".join(["x"] * 500)  # a long thought isn't cut short
+    await world.set_action("thinking", "y" * 9000)
+    assert len(world.body.thought) == 4000  # only a safety net
 
     again, _ = make_world(sqlite_db, tmp_path)
     await again.load()
@@ -453,3 +455,31 @@ async def test_conversations_cannot_change_the_world_or_its_body(runtime_factory
     # Fuzzy's own work can
     assert "world_build" in rt.c.registry.names_for(autonomous=True)
     assert "world_build" not in rt.c.registry.names_for(autonomous=False)
+
+
+async def test_fuzzy_can_make_its_world_bigger_and_it_stays_bigger(
+    sqlite_db: Database, tmp_path: Path
+) -> None:
+    world, bus = make_world(sqlite_db, tmp_path, size=40, max_size=100)
+    seen: list[float] = []
+    bus.subscribe("world.size", lambda e: seen.append(e.payload["size"]))
+    with pytest.raises(WorldError):
+        await world.expand(30)  # never smaller
+    assert await world.expand(80) == 80
+    assert seen == [80]
+    assert world.half == 40
+    obj = await world.build("far tower", [{"shape": "box", "size": [1, 4, 1]}], x=35, z=-35)
+    assert (obj.x, obj.z) == (35, -35)  # it can build out at the edge
+    assert await world.expand(500) == 100  # capped at the configured ceiling
+    with pytest.raises(WorldError):
+        await world.expand(100)
+    reborn, _ = make_world(sqlite_db, tmp_path, size=40, max_size=100)
+    await reborn.load()
+    assert reborn.size == 100
+    assert (await reborn.snapshot())["size"] == 100
+
+
+async def test_apply_expand_and_walk_actions(sqlite_db: Database, tmp_path: Path) -> None:
+    world, _ = make_world(sqlite_db, tmp_path, size=40, max_size=100)
+    assert "from 40 m to 60 m" in await world.apply({"action": "expand", "size": 60})
+    assert "walked to" in await world.apply({"action": "walk", "x": 25, "z": 25})

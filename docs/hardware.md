@@ -24,8 +24,8 @@ The two cards do not pool memory. You have two separate budgets (8 GB and 6 GB),
 
 | Tier | Card | Model (GGUF) | Weights | Approx. total VRAM |
 |---|---|---|---|---|
-| heavy (chat, reasoning, deliberation) | RTX 2070 | Qwen3-8B at Q5_K_M, 8k context | ~5.9 GB | ~7 to 7.5 GB |
-| fast (reflection, appraisal, grounding checks, summaries) | GTX 1660 Ti | Qwen3-4B at Q4_K_M, 8k context shared by two slots | ~2.5 GB | ~3.4 GB |
+| heavy (chat, reasoning, deliberation) | RTX 2070 | Qwen3-8B at Q5_K_M, 16k context | ~5.9 GB | ~7.3 to 7.8 GB |
+| fast (reflection, appraisal, grounding checks, summaries) | GTX 1660 Ti | Qwen3-4B at Q4_K_M, 16k context shared by two slots (8k each) | ~2.5 GB | ~4 GB |
 | embeddings | CPU | nomic-embed-text v1.5 (768-d) at Q8_0 | ~0.15 GB | none |
 | images | GTX 1660 Ti (leftover) | SD 1.5-class model, low-VRAM mode | ~2 GB+ | see "Images" |
 
@@ -35,7 +35,7 @@ Qwen3-4B Q4_K_M at about 2.50 GB ([8B listing](https://app.alphaneural.io/assets
 
 The KV-cache part of the totals is an **estimate** from the architecture (36 layers, 8 KV
 heads, 128-dim heads, so roughly 144 KB per token at FP16): about 1.2 GB for 8k tokens, or about
-0.6 GB with `q8_0` cache quantization, plus a few hundred MB of compute buffers. If the 2070 also
+0.6 GB per 8k with `q8_0` cache quantization (1.2 GB for the 16k used here), plus a few hundred MB of compute buffers. If the 2070 also
 drives a monitor, expect desktop VRAM use on top: run it headless or lower `--ctx-size`.
 
 Why this split: most of Fuzzy's model calls are small, frequent and background (appraising a
@@ -43,11 +43,61 @@ conversation, checking a reply against memory, choosing what to do next, summari
 so the heavy model is free for conversations. Fuzzy's background life is never allowed to starve a person who is waiting:
 when someone talks to it, its own activities pause.
 
-### Other models
+### Going bigger: one 14B model across both cards
 
-Anything with a GGUF and a chat template works; 7 to 9B instruct models are the sweet spot for the 2070.
-Check each model's licence before running it on a public site. A 14B model at Q4 is roughly 9 GB, which
-does not fit the 2070 alone and would need the two-card split above (so no always-on fast tier). Not recommended.
+Two small servers are the fast, safe layout. If you want a noticeably more capable mind and can accept
+having just one model, a **14B at Q4_K_M** (about 9 GB of weights; see the
+[bartowski quant of mlabonne's abliterated Qwen3-14B](https://huggingface.co/bartowski/mlabonne_Qwen3-14B-abliterated-GGUF),
+which lists Q4_K_M at 9.00 GB) can be layer-split over both cards (8 + 6 = 14 GB of VRAM). That leaves
+room for a 16k to 32k context with the `q8_0` cache (roughly 80 KB per token for a 40-layer, 8-KV-head
+model, so about 1.3 GB per 16k tokens: an estimate, check with `nvidia-smi`).
+
+Trade-offs, plainly: both of Fuzzy's tiers share one model, so a conversation and its background
+thinking queue behind each other (two slots keep them from blocking completely); generation is slower than
+an 8B on one card because the layers are split across PCIe; and nothing is left on the 1660 Ti for images.
+In exchange the replies, the self-reflection and the choices it makes about its own life come from a
+model about twice the size.
+
+```bash
+huggingface-cli download bartowski/mlabonne_Qwen3-14B-abliterated-GGUF \
+  --include "*Q4_K_M*" --local-dir /mnt/nvme/models
+# deploy/.env:  BIG_MODEL=<that file's name>   HEAVY_URL=http://llm-big:8000/v1   FAST_URL=http://llm-big:8000/v1
+#               BIG_CTX_SIZE=32768  HEAVY_CTX=16384  FAST_CTX=16384
+docker compose -f deploy/docker-compose.yml --profile models down      # stop the two small servers
+docker compose -f deploy/docker-compose.yml --profile bigmodel up -d --build
+```
+
+To go back, `--profile bigmodel down`, clear `HEAVY_URL`/`FAST_URL`, and bring `--profile models` up again.
+Anything with a GGUF and a chat template works; check each model's licence before running it on a public site.
+
+### Thinking models and latency
+
+Qwen3 models "think" before answering. That helps the quality of what Fuzzy decides, and it costs seconds.
+If replies feel slow you can turn thinking off for a tier with `models.<tier>.extra_body`
+(see `sentient.example.yaml`); the trade is shallower reasoning. Fuzzy's own background beats are fine with
+thinking on. Fuzzy never cuts a thought off for length: each background step has a generous output budget
+(up to 8000 tokens for building, 4000 for most others), and a thought that doesn't come out in the expected
+JSON shape is kept as written instead of being dropped.
+
+### Context and time limits
+
+"No limit" isn't possible: a model has a fixed context window and a GPU has fixed memory. What Fuzzy does
+instead is the following. Conversations use the full window the server offers (the server's `--ctx-size`
+divided by its slots, matched by `models.<tier>.context_window`); when a conversation outgrows that, the older
+part is summarised, and the verbatim text stays in memory, searchable, so nothing is lost. The default time
+limits are very generous (`models.*.timeout_s` 900 s fast / 3600 s heavy, a chat reply may take up to
+`accounts.chat_timeout_s` = 2 hours, autonomous tasks up to `limits.max_wall_time_s` = 2 hours and
+1,000,000 tokens). The loop breakers that stop a model repeating the same tool call forever are kept: they
+exist to stop a stuck loop, not to limit thinking.
+
+## Seeing the machine
+
+Administrators get a **Server** panel (Brain → System, and Admin → Server) with each GPU's temperature, load,
+VRAM, power and fan, the CPU model and load, memory, any CPU/board temperature sensors the kernel exposes, and disk
+space. It reads `nvidia-smi` and `/proc`, `/sys` from inside the container; the compose file gives the
+`sentientai` container the NVIDIA `utility` capability for this (stats only, no compute). Containers often can't
+see CPU package temperatures; then the panel says so rather than guessing. For temperatures on the host itself:
+`watch -n2 nvidia-smi` and `sensors` (from `lm-sensors`).
 
 ## Building and running llama.cpp
 
@@ -65,13 +115,13 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 # heavy: RTX 2070 (replace 0 with its index)
 CUDA_VISIBLE_DEVICES=0 ./build/bin/llama-server \
   -m /models/Qwen3-8B-Q5_K_M.gguf --host 127.0.0.1 --port 8000 \
-  --n-gpu-layers 999 --ctx-size 8192 --flash-attn on \
+  --n-gpu-layers 999 --ctx-size 16384 --flash-attn on \
   --cache-type-k q8_0 --cache-type-v q8_0 --jinja --parallel 1
 
-# fast: GTX 1660 Ti (replace 1 with its index). Two slots share the 8192 context, so each gets 4096.
+# fast: GTX 1660 Ti (replace 1 with its index). Two slots share the 16384 context, so each gets 8192.
 CUDA_VISIBLE_DEVICES=1 ./build/bin/llama-server \
   -m /models/Qwen3-4B-Q4_K_M.gguf --host 127.0.0.1 --port 8002 \
-  --n-gpu-layers 999 --ctx-size 8192 --flash-attn on \
+  --n-gpu-layers 999 --ctx-size 16384 --flash-attn on \
   --cache-type-k q8_0 --cache-type-v q8_0 --jinja --parallel 2
 
 # embeddings: CPU, so no VRAM is spent
@@ -88,7 +138,7 @@ Notes:
   model's template can't do tools, set `supports_tools: false` for that tier and Fuzzy switches to a
   prompted JSON tool protocol automatically.
 * With `--parallel 2`, `--ctx-size` is divided between slots, so the config's `models.fast.context_window`
-  is the per-slot figure (4096 here).
+  is the per-slot figure (8192 here).
 * Systemd units are in `deploy/systemd/llama-server@.service`; the compose file has a `models` profile.
 
 Set the matching task prefixes for asymmetric embedding models (nomic uses `search_query: ` /
@@ -108,7 +158,7 @@ and `openai` (any OpenAI-compatible `/v1/images/generations` server).
    The reported fix is full precision (`--no-half --precision full` in the WebUI), **which uses more
    VRAM**. Other flags (such as `--upcast-sampling` or `--no-half-vae`) are often suggested; check
    the WebUI's own documentation for your version before relying on them.
-2. *VRAM.* With the 4B fast model resident (~3.4 GB), about 2.5 GB of the 1660 Ti is left. That will
+2. *VRAM.* With the 4B fast model resident (~4 GB with 16k context), about 2 GB of the 1660 Ti is left. That will
    not hold a full-precision Stable Diffusion model plus activations.
 
 Your realistic options, best first:

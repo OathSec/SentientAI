@@ -18,24 +18,33 @@
 
   scene.add(new THREE.HemisphereLight(0xffffff, dark ? 0x333a35 : 0x9aa89d, 0.5));
   const sun = new THREE.DirectionalLight(0xffffff, 0.5);
-  const half = world.size / 2;
-  sun.position.set(half * 0.6, half * 1.2, half * 0.4);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, near: 1, far: half * 4 });
   scene.add(sun);
 
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(world.size, world.size),
+    new THREE.PlaneGeometry(1, 1),
     new THREE.MeshLambertMaterial({ color: dark ? 0x3c4a3c : 0xb9c8a8 }));
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   scene.add(ground);
   const edge = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.PlaneGeometry(world.size, world.size)),
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1)),
     new THREE.LineBasicMaterial({ color: dark ? 0x68786a : 0x8a9a80 }));
   edge.rotation.x = -Math.PI / 2; edge.position.y = 0.01;
   scene.add(edge);
+  // The ground is Fuzzy's to enlarge, so its size can change while the page is open.
+  function setSize(size) {
+    world.size = size;
+    const half = size / 2;
+    ground.scale.set(size, size, 1);
+    edge.scale.set(size, size, 1);
+    sun.position.set(half * 0.6, half * 1.2, half * 0.4);
+    Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, near: 1, far: half * 4 });
+    sun.shadow.camera.updateProjectionMatrix();
+    camera.far = Math.max(500, size * 4); camera.updateProjectionMatrix();
+  }
+  setSize(world.size);
 
   // ---------------------------------------------------------------- shapes
   const rad = (d) => (d * Math.PI) / 180;
@@ -108,7 +117,7 @@
   let body = world.body;
 
   // ---------------------------------------------------------------- camera
-  const view = { azimuth: 0.6, polar: 0.95, distance: Math.max(8, world.size * 0.55), target: new THREE.Vector3(0, 0, 0), focus: null };
+  const view = { azimuth: 0.6, polar: 0.95, distance: Math.max(8, Math.min(60, world.size * 0.55)), target: new THREE.Vector3(0, 0, 0), focus: null };
   function updateCamera() {
     const t = view.focus || (follow.checked ? new THREE.Vector3(shown.x, 1, shown.z) : view.target);
     view.target.lerp(t, 0.08);
@@ -161,6 +170,7 @@
     const verbs = { standing: "standing around", walking: "walking", building: "building", thinking: "thinking", resting: "resting", talking: "talking with someone", creating: "making something" };
     $("now").textContent = name + " is " + (verbs[body.action] || body.action);
     $("thought").textContent = body.thought || "";
+    $("size").textContent = Math.round(world.size) + " m across";
     const bubble = $("bubble");
     bubble.textContent = body.thought || "";
     bubble.classList.toggle("hidden", !body.thought);
@@ -182,6 +192,7 @@
   live("/api/world/stream", (e) => {
     const p = e.payload || {};
     if (e.type === "world.body") { body = p.body; describeAction(); }
+    else if (e.type === "world.size") { setSize(p.size); $("size").textContent = Math.round(p.size) + " m across"; }
     else if (e.type === "world.avatar") { avatarData = p.avatar; buildAvatar(); describeAvatar(); }
     else if (e.type === "world.object") {
       if (p.op === "removed") remove(p.object.id); else place(p.object, p.op === "built");

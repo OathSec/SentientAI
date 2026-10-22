@@ -88,7 +88,7 @@ class Emotions:
             self.mood_at = datetime.fromisoformat(at) if at else None
 
     async def set_mood(self, text: str) -> None:
-        text = " ".join(str(text).split())[:300]
+        text = " ".join(str(text).split())[:2000]
         if not text:
             return
         self.mood = text
@@ -130,7 +130,7 @@ class Emotions:
                     intensity=intensity,
                     valence=_num(item.get("valence"), 0.0, -1.0, 1.0),
                     lingers_s=_num(item.get("lingers_hours"), 2.0, 0.05, 72.0) * 3600,
-                    cause=" ".join(str(item.get("cause") or "").split())[:300],
+                    cause=" ".join(str(item.get("cause") or "").split())[:2000],
                     user_id=owner,
                     created_at=now,
                 )

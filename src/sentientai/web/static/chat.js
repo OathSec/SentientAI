@@ -13,15 +13,18 @@
 
   const dayKey = (iso) => new Date(iso).toDateString();
   const hhmm = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const nearBottom = () => window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
-  const toBottom = () => window.scrollTo(0, document.body.scrollHeight);
+  const nearBottom = () => log.scrollTop + log.clientHeight >= log.scrollHeight - 160;
+  const toBottom = () => { log.scrollTop = log.scrollHeight; };
 
   function bubble(m, extra) {
     const mine = m.role !== "assistant";
+    const body = mine ? m.content : Markdown.render(m.content);
     const node = el("div", { class: "msg " + (mine ? "me" : "fuzzy") + (extra ? " " + extra : "") },
-      el("div", { class: "bubble" }, m.content));
+      el("div", { class: "bubble" + (mine ? "" : " rich") }, body));
     for (const image of m.media || []) {
-      node.firstChild.append(el("img", { src: image.url, alt: "An image from " + name, loading: "lazy" }));
+      const link = el("a", { href: image.url, target: "_blank", rel: "noopener" },
+        el("img", { src: image.url, alt: "An image from " + name, loading: "lazy" }));
+      node.firstChild.append(link);
     }
     node.append(el("div", { class: "stamp" }, extra === "pending" ? "sending…" : hhmm(m.at)));
     return node;
@@ -113,7 +116,10 @@
   async function loadMood() {
     try {
       const brain = await api("/api/brain");
-      $("mood").textContent = brain.paused ? name + " is paused right now." : brain.mood ? name + " is feeling: " + brain.mood : "";
+      const doing = brain.body && brain.body.action && brain.body.action !== "standing" ? brain.body.action : "";
+      $("mood").textContent = brain.paused ? name + " is paused right now."
+        : [brain.mood ? name + " is feeling: " + brain.mood : "", doing ? "(" + doing + " in its world)" : ""].filter(Boolean).join(" ");
+      $("presence").className = "presence" + (brain.paused ? " off" : " on");
     } catch (e) { /* the brain page is optional here */ }
   }
 
@@ -163,4 +169,5 @@
     if (r.busy) startPolling(r.since); else send.disabled = false;
   }
   text.focus();
+  setInterval(() => { if (!document.hidden) loadMood(); }, 30000);
 })();

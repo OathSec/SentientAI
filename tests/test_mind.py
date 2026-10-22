@@ -662,17 +662,9 @@ async def test_research_hands_a_task_to_the_agent(runtime_factory: Any) -> None:
         Brain(beat=beat("research", "how tides work"), default_answer="Noted."), start=False
     )
     c = rt.c
-    # Web search is disabled in tests, so research isn't offered; drive the handler directly.
-    from sentientai.cognition.agency import Choice
-
-    activity, _ = await c.agency.beat()
-    assert activity is None
-    choice = Choice("research", "how tides work", "curious", None, None, 60.0)
-    from sentientai.storage.records import ActivityRecord
-
-    record = ActivityRecord(kind="research", intent="how tides work")
-    out = await c.agency._do_research(choice, record, await c.interoception.sense())
-    assert "Started looking into it" in out
+    activity, _ = await c.agency.beat()  # research is always on offer: Fuzzy can go out and look
+    assert activity is not None and activity.kind == "research"
+    assert "Started looking into it" in activity.outcome
     [task] = await c.db.tasks.list()
     assert task.source is TaskSource.INTRINSIC and "how tides work" in task.goal
     await asyncio.sleep(0)
@@ -718,3 +710,72 @@ async def test_the_tools_say_so_when_it_is_overwhelmed(runtime_factory: Any) -> 
     assert (
         belief is not None and belief.source == "conversation:usr_a"
     )  # admins can see where it came from
+
+
+async def test_a_beat_that_comes_out_unstructured_is_kept_as_a_thought(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    rt = await runtime_factory(
+        Brain(beat="I keep wondering whether the sea remembers the rain.\n\nMaybe it does."),
+        start=False,
+    )
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and activity.kind == "think"
+    assert activity.status is ActivityStatus.DONE
+    assert activity.outcome.endswith("Maybe it does.")  # nothing trimmed
+    thoughts = await rt.c.db.memories.list(kinds=[MemoryKind.THOUGHT], scope=Scope())
+    assert any("the sea remembers the rain" in t.content for t in thoughts)
+    assert "Maybe it does." in rt.c.world.body.thought  # and it shows over its head, in full
+
+
+async def test_a_beat_that_says_nothing_is_recorded_as_failed_not_silent(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    rt = await runtime_factory(Brain(beat=""), start=False)
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and activity.status is ActivityStatus.FAILED
+    assert "Nothing came out" in activity.outcome
+    [recorded] = await rt.c.db.activities.recent(limit=5)
+    assert recorded.id == activity.id
+
+
+async def test_choosing_something_it_cannot_do_is_visible_too(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    rt = await runtime_factory(Brain(beat=beat("teleport", "go to the moon")), start=False)
+    activity, _ = await rt.c.agency.beat()
+    assert activity is None
+    [recorded] = await rt.c.db.activities.recent(limit=5)
+    assert recorded.status is ActivityStatus.FAILED and "teleport" in recorded.outcome
+
+
+async def test_it_can_walk_where_it_wants_and_say_what_it_thinks_on_the_way(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    rt = await runtime_factory(
+        Brain(
+            beat=beat("walk", "see the far corner"),
+            walk={"x": 12, "z": -9, "note": "I've never been over here before."},
+        ),
+        start=False,
+    )
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and activity.status is ActivityStatus.DONE
+    assert rt.c.world.body.target == [12.0, -9.0]
+    assert rt.c.world.body.thought == "I've never been over here before."
+
+
+async def test_it_can_make_its_world_bigger_when_it_decides_to(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    rt = await runtime_factory(
+        Brain(
+            beat=beat("build", "make more room"),
+            world={"action": "expand", "size": 120, "note": "I need space to spread out."},
+        ),
+        start=False,
+    )
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and "bigger" in activity.outcome
+    assert rt.c.world.size == 120
+    assert rt.c.world.body.thought == "I need space to spread out."

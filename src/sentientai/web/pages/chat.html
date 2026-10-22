@@ -7,13 +7,14 @@
 <link rel="icon" href="/static/icon.svg">
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body class="fill">
 <header class="top" id="top"></header>
 <main>
   <div id="notes"></div>
-  <div class="row spread">
-    <p id="mood" class="muted small"></p>
-    <p><button class="secondary hidden" id="earlier">Load earlier messages</button></p>
+  <div class="chatbar">
+    <span class="presence" id="presence" aria-hidden="true"></span>
+    <p id="mood" class="muted small nomargin grow"></p>
+    <button class="secondary small hidden" id="earlier">Earlier messages</button>
   </div>
   <div id="log" aria-live="polite"></div>
   <div id="composer">

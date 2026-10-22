@@ -1088,3 +1088,47 @@ async def test_a_failed_reply_leaves_a_message_and_refunds_the_quota(web_factory
     usage = (await client.get("/api/me")).json()["usage"]["messages"]
     assert usage in (0, 1)
     assert (await client.get("/api/chat/poll?after=garbage")).status_code == 422
+
+
+async def test_admins_can_see_the_thinking_behind_replies_and_the_servers_state(
+    web_factory: Any,
+) -> None:
+    w = await web_factory(Brain(["Hi, I'm Fuzzy."]))
+    _, admin, admin_csrf = await person(w, "root", role=UserRole.ADMIN)
+    _, alice, _ = await person(w, "alice")
+    await talk(admin, admin_csrf, "hello")
+    rows = (await admin.get("/api/admin/thinking")).json()
+    assert any(r["type"] == "answer" and "Hi, I'm Fuzzy." in r["answer"] for r in rows)
+    hardware = (await admin.get("/api/admin/hardware")).json()
+    assert {"gpus", "cpu", "memory", "temperatures", "disks", "uptime_s"} <= set(hardware)
+    assert hardware["cpu"]["threads"] >= 1
+    # Only the operator sees either; ordinary people are refused.
+    assert (await alice.get("/api/admin/thinking")).status_code == 403
+    assert (await alice.get("/api/admin/hardware")).status_code == 403
+
+
+async def test_brain_shows_how_each_choice_was_reached_without_cutting_it_short(
+    web_factory: Any,
+) -> None:
+    long_why = "because " + "it matters to me " * 200
+    w = await web_factory(
+        Brain(beat={"choice": "think", "intent": "wonder", "why": long_why, "rest_minutes": 5})
+    )
+    await w.rt.c.agency.beat()
+    _, alice, _ = await person(w, "alice")
+    view = (await alice.get("/api/brain")).json()
+    act = view["activities"][0]
+    assert act["reason"] == " ".join(long_why.split())  # whole, not trimmed to a few hundred chars
+    assert "wonder" in act["thinking"] and "next_activity_in_s" in view
+
+
+async def test_a_reply_that_comes_back_empty_is_retried_then_explained(web_factory: Any) -> None:
+    w = await web_factory(Brain(["", "", ""]))
+    _, alice, csrf = await person(w, "alice")
+    said = await talk(alice, csrf, "what do you think of the sea?")
+    assert "(no answer produced)" not in said["answer"]
+    assert "ran out of room" in said["answer"]
+    w2 = await web_factory(Brain(["", "The sea feels like patience."]))
+    _, bob, csrf2 = await person(w2, "bob")
+    said = await talk(bob, csrf2, "what do you think of the sea?")
+    assert said["answer"] == "The sea feels like patience."

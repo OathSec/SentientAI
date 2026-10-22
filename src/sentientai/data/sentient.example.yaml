@@ -18,17 +18,17 @@ identity:
 # Ollama (base_url http://host:11434/v1), LM Studio, TGI.
 #
 # Reference hardware (see docs/hardware.md): one llama.cpp CUDA build, one tier per card.
-#   heavy  -> RTX 2070 (8 GB): an 8B model at Q5_K_M with 8k context (about 7 GB in total).
-#   fast   -> GTX 1660 Ti (6 GB): a 4B model at Q4_K_M (about 3.4 GB), leaving ~2.5 GB.
+#   heavy  -> RTX 2070 (8 GB): an 8B model at Q5_K_M with 16k context (about 7.5 GB in total).
+#   fast   -> GTX 1660 Ti (6 GB): a 4B model at Q4_K_M (about 4 GB with 16k context), leaving ~2.5 GB.
 #   embeddings run on the CPU. Image generation: see `images` below and docs/hardware.md.
 models:
   heavy:
     base_url: http://127.0.0.1:8000/v1
     model: heavy            # llama-server serves whatever GGUF it loaded; the name is informational
-    context_window: 8192
-    max_output_tokens: 2048
+    context_window: 16384   # match the server's --ctx-size (compose: HEAVY_CTX_SIZE)
+    max_output_tokens: 4096
     temperature: 0.3
-    timeout_s: 600
+    timeout_s: 3600
     supports_tools: true    # set false if the server/chat template lacks native tool calling
     # Qwen3-family models "think" at length before answering, which makes every reply slow.
     # This asks llama.cpp's server to skip that (it ignores the field if unsupported):
@@ -37,10 +37,10 @@ models:
   fast:
     base_url: http://127.0.0.1:8002/v1
     model: fast
-    context_window: 4096    # per slot: llama-server divides --ctx-size 8192 between 2 slots
-    max_output_tokens: 1024
+    context_window: 8192    # per slot: llama-server divides --ctx-size 16384 between 2 slots
+    max_output_tokens: 2048
     temperature: 0.2
-    timeout_s: 180
+    timeout_s: 900
     supports_tools: true
     # extra_body: {chat_template_kwargs: {enable_thinking: false}}
     device: "cuda (GTX 1660 Ti)"
@@ -77,12 +77,12 @@ memory:
 # -----------------------------------------------------------------------------
 # Deterministic loop breakers: every run is bounded by all of these.
 limits:
-  max_steps: 24
-  max_tool_calls: 48
-  max_wall_time_s: 900
+  max_steps: 60
+  max_tool_calls: 120
+  max_wall_time_s: 7200
   max_repeat_calls: 3
   max_consecutive_failures: 4
-  max_tokens_per_task: 250000
+  max_tokens_per_task: 1000000
   llm_requests_per_minute: 120
 
 sandbox:
@@ -151,6 +151,7 @@ accounts:
   daily_messages: 200         # per person per day (0 = unlimited); admins are never limited
   daily_images: 10
   daily_teach_bytes: 20000000
+  chat_timeout_s: 7200        # longest a reply may take (it is made in the background, so nobody waits on it)
   public_pages: false         # let visitors who aren't signed in see the brain, world and gallery (names redacted)
   hsts: false                 # send Strict-Transport-Security (turn on once you serve HTTPS)
   # trusted_proxies: ["172.16.0.0/12"]   # reverse proxies whose X-Forwarded-For is believed
@@ -167,7 +168,7 @@ mind:
   beat_max_s: 3600            # longest rest it may choose
   prior_contact_gap_hours: 6  # starting guess for how often people visit; experience replaces it
   notes_per_person_per_day: 1 # notes it may leave for someone it misses (0 = never)
-  # activities: [think, wander, journal, study, research, create_art, build, write_note,
+  # activities: [think, wander, journal, study, research, create_art, build, walk, write_note,
   #              reconsider, pursue_goal, new_goal, rest]   # what it may choose from
 
 # Image generation: a separate server (see docs/hardware.md for the 1660 Ti caveats).
@@ -183,8 +184,9 @@ images:
 
 # Fuzzy's 3D world (shaped by Fuzzy itself; viewed on the World page).
 world:
-  size: 40                    # metres across
-  max_objects: 150
+  size: 40                    # metres across at the start; Fuzzy can expand it, never shrink it
+  max_size: 400               # the most it may expand to
+  max_objects: 500
   max_parts_per_object: 40
 
 self_improvement:

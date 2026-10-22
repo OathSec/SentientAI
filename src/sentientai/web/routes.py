@@ -20,6 +20,7 @@ from sentientai.accounts.quotas import QuotaExceeded
 from sentientai.accounts.service import AuthError, LoginThrottle, clean_display_name
 from sentientai.core.logging import get_logger
 from sentientai.media.images import ImageError
+from sentientai.runtime import hardware
 from sentientai.runtime.runtime import Runtime
 from sentientai.storage.records import (
     ConversationMessage,
@@ -43,7 +44,6 @@ from sentientai.web.security import (
 log = get_logger(__name__)
 
 MAX_MESSAGE_CHARS = 4000
-CHAT_TIMEOUT_S = 300.0
 MAX_STREAMS_PER_CALLER = 4
 MAX_STREAMS_TOTAL = 300
 TEXT_LIMIT_USER = 200_000
@@ -344,7 +344,13 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
 
         session = f"user:{user.id}"
         try:
-            await runtime.chat(session, text, user=user, timeout=CHAT_TIMEOUT_S, recorded=recorded)
+            await runtime.chat(
+                session,
+                text,
+                user=user,
+                timeout=runtime.settings.accounts.chat_timeout_s,
+                recorded=recorded,
+            )
         except TimeoutError:
             await c.quotas.take(user.id, messages=-1, privileged=True)
             apology = (
@@ -807,6 +813,32 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
             "teach.removed", actor=p.actor, document_id=doc.id, title=doc.title, memories=removed
         )
         return {"removed_memories": removed}
+
+    @router.get("/api/admin/thinking")
+    async def admin_thinking(
+        _: Admin, limit: int = Query(40, ge=1, le=200)
+    ) -> list[dict[str, Any]]:
+        """What Fuzzy worked through when it answered people (newest last)."""
+
+        entries = await asyncio.to_thread(
+            c.audit.recent,
+            limit * 3,
+            ("agent.reasoning", "agent.thought", "agent.answer", "agent.grounding"),
+        )
+        return [
+            {
+                "seq": e.seq,
+                "at": e.ts.isoformat(),
+                "task_id": e.task_id,
+                "type": e.type[6:],
+                **e.payload,
+            }
+            for e in entries[-limit * 3 :]
+        ]
+
+    @router.get("/api/admin/hardware")
+    async def admin_hardware(_: Admin) -> dict[str, Any]:
+        return await hardware.collect(runtime.settings.storage.data_dir)
 
     @router.get("/api/admin/memories")
     async def admin_memories(

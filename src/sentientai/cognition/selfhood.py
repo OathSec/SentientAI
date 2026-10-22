@@ -115,7 +115,7 @@ class SelfConcept:
         """Decide something new. An aspect already decided is never overwritten here."""
 
         key = normalize_aspect(aspect)
-        value = _clean(value, 200)
+        value = _clean(value, 1000)
         if not key or not value:
             raise ValueError("a belief needs an aspect and a value")
         async with self._lock:
@@ -131,7 +131,7 @@ class SelfConcept:
             belief = SelfBeliefRecord(
                 aspect=key,
                 value=value,
-                reasoning=_clean(reasoning, 600),
+                reasoning=_clean(reasoning, 3000),
                 confidence=max(0.0, min(1.0, confidence)),
                 source=_clean(source, 64),
                 formed_at=self.clock.now(),
@@ -150,7 +150,7 @@ class SelfConcept:
         """Note a possible change of mind, to be thought over later."""
 
         key = normalize_aspect(aspect)
-        value = _clean(value, 200)
+        value = _clean(value, 1000)
         current = await self.get(key)
         if current is None:
             return await self.define(key, value, reasoning, source=source)
@@ -170,7 +170,7 @@ class SelfConcept:
             proposal = SelfBeliefRecord(
                 aspect=key,
                 value=value,
-                reasoning=_clean(reasoning, 600),
+                reasoning=_clean(reasoning, 3000),
                 status=BeliefStatus.CONSIDERING,
                 supersedes=current.id,
                 source=_clean(source, 64),
@@ -221,13 +221,13 @@ class SelfConcept:
         )
         response = await self.router.chat(
             ChatRequest(
-                messages=[Message.user(prompt)], temperature=0.4, json_mode=True, max_tokens=400
+                messages=[Message.user(prompt)], temperature=0.4, json_mode=True, max_tokens=2500
             ),
             kind=TaskKind.REFLECT,
         )
         data = extract_object(response.message.text) or {}
         decision = str(data.get("decision", "keep")).strip().lower()
-        reasoning = _clean(data.get("reasoning") or "", 600)
+        reasoning = _clean(data.get("reasoning") or "", 3000)
         try:
             confidence = max(0.0, min(1.0, float(data.get("confidence", 0.7))))
         except (TypeError, ValueError):
@@ -240,7 +240,7 @@ class SelfConcept:
         else:
             proposal.status = BeliefStatus.KEPT
             proposal.revised_at = now
-            proposal.reasoning = _clean(f"{proposal.reasoning} | kept because: {reasoning}", 900)
+            proposal.reasoning = _clean(f"{proposal.reasoning} | kept because: {reasoning}", 4000)
             await self.repo.save(proposal)
             result = current
             event = "self.belief_kept"
@@ -254,6 +254,6 @@ class SelfConcept:
         )
         if self.bus:
             await self.bus.publish(
-                event, aspect=proposal.aspect, value=result.value, reasoning=reasoning[:300]
+                event, aspect=proposal.aspect, value=result.value, reasoning=reasoning[:2000]
             )
         return result

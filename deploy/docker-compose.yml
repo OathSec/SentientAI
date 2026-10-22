@@ -90,8 +90,14 @@ services:
       SENTIENT_IMAGES__BACKEND: ${SENTIENT_IMAGE_BACKEND:-disabled}
       SENTIENT_IMAGES__BASE_URL: ${SENTIENT_IMAGE_URL:-http://host.docker.internal:7860}
       SENTIENT_SAFETY__AUDIT_HMAC_KEY: ${SENTIENT_AUDIT_KEY:?set SENTIENT_AUDIT_KEY in deploy/.env}
-      SENTIENT_MODELS__HEAVY__BASE_URL: http://llm-heavy:8000/v1
-      SENTIENT_MODELS__FAST__BASE_URL: http://llm-fast:8002/v1
+      # Where each tier's model server is. The defaults are the two servers below; for the
+      # single big-model layout (profile `bigmodel`) point both at http://llm-big:8000/v1.
+      SENTIENT_MODELS__HEAVY__BASE_URL: ${HEAVY_URL:-http://llm-heavy:8000/v1}
+      SENTIENT_MODELS__FAST__BASE_URL: ${FAST_URL:-http://llm-fast:8002/v1}
+      # Per-request context each tier plans for (tokens). Keep at or below the server's own ctx
+      # (--ctx-size, divided by --parallel slots).
+      SENTIENT_MODELS__HEAVY__CONTEXT_WINDOW: ${HEAVY_CTX:-16384}
+      SENTIENT_MODELS__FAST__CONTEXT_WINDOW: ${FAST_CTX:-8192}
       SENTIENT_MODELS__EMBEDDING__BASE_URL: http://llm-embed:8001/v1
     volumes:
       - ./sentient.yaml:/config/sentient.yaml:ro
@@ -103,6 +109,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - ${DOCKER_GID:-999}
+    # Read-only GPU stats (nvidia-smi) for the Server panel: the `utility` capability exposes
+    # temperatures, load and VRAM without giving the container compute access to the cards.
+    # Remove this block on a machine without the NVIDIA container toolkit.
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [utility]}]
     extra_hosts:
       - "host.docker.internal:host-gateway"   # reach an image server running on the host
     ports:
@@ -141,7 +154,7 @@ services:
     command: >
       -m /models/${HEAVY_MODEL:-heavy.gguf}
       --host 0.0.0.0 --port 8000
-      --n-gpu-layers 999 --ctx-size 8192 --flash-attn on
+      --n-gpu-layers 999 --ctx-size ${HEAVY_CTX_SIZE:-16384} --flash-attn on
       --cache-type-k q8_0 --cache-type-v q8_0 --jinja --parallel 1
 
   llm-fast:
@@ -159,13 +172,37 @@ services:
     command: >
       -m /models/${FAST_MODEL:-fast.gguf}
       --host 0.0.0.0 --port 8002
-      --n-gpu-layers 999 --ctx-size 8192 --flash-attn on
+      --n-gpu-layers 999 --ctx-size ${FAST_CTX_SIZE:-16384} --flash-attn on
+      --cache-type-k q8_0 --cache-type-v q8_0 --jinja --parallel 2
+
+  # One bigger model across BOTH cards (profile `bigmodel`, instead of `models`' two servers):
+  # for example a 14B at Q4_K_M (~9 GB), layer-split over the 2070 and the 1660 Ti. Both of
+  # Fuzzy's tiers then use it (set HEAVY_URL and FAST_URL to http://llm-big:8000/v1, and
+  # HEAVY_CTX / FAST_CTX to half of BIG_CTX_SIZE because two slots share it). Run it together
+  # with `llm-embed`, but not with llm-heavy / llm-fast. See docs/hardware.md.
+  llm-big:
+    <<: *restart
+    profiles: [bigmodel]
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    environment:
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["${HEAVY_GPU:-0}", "${FAST_GPU:-1}"], capabilities: [gpu]}]
+    volumes:
+      - ${MODELS_PATH:-./models}:/models:ro
+    command: >
+      -m /models/${BIG_MODEL:-big.gguf}
+      --host 0.0.0.0 --port 8000
+      --n-gpu-layers 999 --split-mode layer --tensor-split ${BIG_SPLIT:-8,6}
+      --ctx-size ${BIG_CTX_SIZE:-32768} --flash-attn on
       --cache-type-k q8_0 --cache-type-v q8_0 --jinja --parallel 2
 
   # Embeddings on the CPU: tiny, and it keeps the GPUs' VRAM for the language models.
   llm-embed:
     <<: *restart
-    profiles: [models]
+    profiles: [models, bigmodel]
     image: ghcr.io/ggml-org/llama.cpp:server
     volumes:
       - ${MODELS_PATH:-./models}:/models:ro

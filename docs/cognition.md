@@ -78,9 +78,10 @@ now are offered:
 | think / wander | Think something through with what it remembers, or follow a chain of memories; may record an insight or something it's curious about. |
 | journal | Write about what really happened lately (only things in its activity record). |
 | study | Read something people taught it; summarise, react, note questions. |
-| research | Hand a bounded task to the agent to look something up and store what it learns. |
+| research | Hand a task to the agent to go out on the web (search, read pages) and store what it learns. Always on offer; whether it can reach anything depends on `web.search_backend` and the sandbox. |
 | create_art | Describe and generate an image (if image generation is set up); it goes in the public gallery. |
-| build | Act in its world: build, change or remove things, walk, or redesign its own avatar. |
+| build | Act in its world: build anywhere on its ground, rebuild or remove things (including its own earlier work), make the ground bigger, or redesign its own avatar. |
+| walk | Walk to a place it chooses, thinking aloud on the way. |
 | write_note | Leave a note for someone it misses (limited per person per day, never stacked on an unread one). |
 | reconsider | Deliberate on a possible change to who it is. |
 | pursue_goal / new_goal | Work on, or set, its own goals (bounded; autonomous work runs under the stricter autonomous safety thresholds). |
@@ -91,6 +92,17 @@ There is no mapping from feeling to action: if its recent activities have been v
 up to it. Every activity is stored with its intent, its reason and its outcome, shown on the Brain
 page, and audited. Fuzzy's own activities pause when someone talks to it, and a failed activity is
 recorded, not fatal.
+
+Nothing about a beat is silent. If the model's answer isn't in the expected shape, the words it did produce are kept
+as a thought; if it chooses something it can't do, or says nothing, that is recorded as a failed beat with what
+happened. The *Thinking* tab on the Brain page shows, for every choice, what the model produced while deciding.
+No thought is shortened for display: the limits are generous safety nets (thousands of characters), not styles.
+
+**Why it may look like Fuzzy isn't doing much at first.** Each beat is one decision by one model, followed by a rest
+it chooses itself (`mind.beat_min_s` to `mind.beat_max_s`). A small model makes thin, repetitive choices, and a
+brand-new mind has few memories, no goals and nothing to be bored by yet; it is meant to start slowly and grow from
+what it does. Nothing here forces it to be busy. The levers that matter are the model (bigger is better), time, and
+people teaching it things.
 
 ## Grounding: not making things up (`cognition/grounding.py`)
 
@@ -164,8 +176,11 @@ curiosity. Confidence is reported with every answer.
 
 ## The Brain page
 
-`/brain` shows what Fuzzy is feeling, what it senses, who it has decided to be, its goals, what it has
-been doing and why, recent thoughts, memory counts and search, and a live event feed. What a viewer
+`/brain` has tabs: *Right now* (what it's doing, feelings, senses, goals, when its next activity is), *Self*
+(decided beliefs and its story), *Doing* (every activity and result), *Thinking* (the reasoning behind each choice,
+its thoughts, and, for administrators, the reasoning and self-checks behind its replies in conversations),
+*Memory* (counts and search), *Live* (event feed), and for administrators *People* and *System* (work queue and
+server hardware). What a viewer
 sees depends on who they are:
 
 * **Administrators** see everything, unredacted, plus the people Fuzzy knows, its attention, tasks, approvals and model health.
@@ -181,8 +196,10 @@ The same rules apply to the live stream: events are whitelisted per type, scoped
 colours) before it is stored. Fuzzy **designs its own avatar** the same way, **walks** to places it
 chooses (with a thought bubble over its head), and **builds** things, always as its own choice: the tools that
 build, change, remove, walk or redesign its body are available only in Fuzzy's own autonomous work, never in a
-conversation (not even an administrator's). People can look around and click objects; changes appear live. Limits: `world.max_objects`,
-`world.max_parts_per_object`, `world.size`.
+conversation (not even an administrator's). People can look around and click objects; changes appear live. The ground starts at `world.size` metres across and Fuzzy can **expand** it (never shrink it) up to `world.max_size`;
+it is told its extents and that it can build anywhere, rebuild or remove anything it made, and walk wherever it
+wants. Whatever it does, its own words about it appear in the bubble over its head and on the side panel, in full.
+Limits: `world.max_objects`, `world.max_parts_per_object`, `world.size`, `world.max_size`.
 
 ## Self-improvement (`reflection/`)
 

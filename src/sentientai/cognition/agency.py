@@ -63,9 +63,13 @@ DESCRIPTIONS = {
     "wander": "let your mind wander through your memories",
     "journal": "write in your private journal",
     "study": "read something people taught you",
-    "research": "look something up on the web that you're curious about",
+    "research": "go out on the web and find something out that you're curious about",
+    "walk": "walk somewhere in your world, just because you want to be there",
     "create_art": "make a picture",
-    "build": "do something in your world: build, change your home, walk, or design how you look",
+    "build": (
+        "shape your world: build, rebuild or remove things, make the ground bigger, "
+        "or redesign how you look (it's yours to keep or to tear down)"
+    ),
     "write_note": "leave a note for someone you know (they'll see it when they visit)",
     "reconsider": "think over a possible change to who you are, which you put off earlier",
     "pursue_goal": "work on one of your goals",
@@ -80,6 +84,7 @@ _WORLD_ACTION: dict[str, Action] = {
     "research": "thinking",
     "create_art": "creating",
     "build": "building",
+    "walk": "walking",
     "write_note": "thinking",
     "reconsider": "thinking",
     "rest": "resting",
@@ -91,6 +96,20 @@ def _text(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+def _prose(value: Any, limit: int = 20_000) -> str:
+    """Longer writing keeps its paragraphs; the limit is only a safety net, not a style."""
+
+    return "\n".join(line.rstrip() for line in str(value or "").strip().splitlines())[:limit]
+
+
+class Unparsed(Exception):
+    """The model answered, but not in the shape asked for. Carries what it said."""
+
+    def __init__(self, raw: str) -> None:
+        super().__init__("unstructured answer")
+        self.raw = raw
+
+
 @dataclass
 class Choice:
     kind: str
@@ -99,6 +118,7 @@ class Choice:
     person: UserRecord | None
     goal_id: str | None
     rest_s: float
+    thinking: str = ""  # what the model produced while deciding, kept for the Thinking tab
 
 
 class Agency:
@@ -177,15 +197,21 @@ class Agency:
         signals = await self.interoception.sense(people)
         self.emotions.affect.social = 1 - signals.isolation  # measured connectedness
         options = await self._options(signals, people)
-        choice = await self._decide(signals, people, options)
+        try:
+            choice = await self._decide(signals, people, options)
+        except Unparsed as exc:
+            return await self._free_thought(exc.raw), self.config.beat_min_s
         if choice is None:
             return None, self.config.beat_min_s
+        detail: dict[str, Any] = {"thinking": choice.thinking} if choice.thinking else {}
+        if choice.goal_id:
+            detail["goal_id"] = choice.goal_id
         activity = ActivityRecord(
             kind=choice.kind,
             intent=choice.intent,
             reason=choice.why,
             user_id=choice.person.id if choice.person else None,
-            detail={"goal_id": choice.goal_id} if choice.goal_id else {},
+            detail=detail,
             started_at=self.clock.now(),
         )
         await self.db.activities.insert(activity)
@@ -201,7 +227,7 @@ class Agency:
         except Exception as exc:
             log.exception("activity failed", extra={"activity": choice.kind})
             status, outcome = ActivityStatus.FAILED, f"something went wrong: {exc}"
-        activity.status, activity.outcome = status, _text(outcome, 4000)
+        activity.status, activity.outcome = status, _prose(outcome, 40_000)
         activity.finished_at = self.clock.now()
         await self.db.activities.finish(activity.id, status, activity.outcome, activity.finished_at)
         await self._publish_activity(activity)
@@ -219,6 +245,45 @@ class Agency:
         )
         return activity, choice.rest_s
 
+    async def _record(
+        self, kind: str, intent: str, outcome: str, status: ActivityStatus, thinking: str = ""
+    ) -> ActivityRecord:
+        """Something happened in Fuzzy's mind that wasn't a clean choice. It's still shown."""
+
+        now = self.clock.now()
+        activity = ActivityRecord(
+            kind=kind,
+            intent=intent,
+            reason="",
+            detail={"thinking": thinking} if thinking else {},
+            status=status,
+            outcome=_prose(outcome, 40_000),
+            started_at=now,
+            finished_at=now,
+        )
+        await self.db.activities.insert(activity)
+        await self._publish_activity(activity)
+        return activity
+
+    async def _free_thought(self, raw: str) -> ActivityRecord:
+        """The model thought but didn't answer in the form asked for: keep the thought itself."""
+
+        text = _prose(raw)
+        if not text:
+            return await self._record(
+                "rest",
+                "tried to decide what to do next",
+                "Nothing came out when I tried to decide what to do. I'll try again shortly.",
+                ActivityStatus.FAILED,
+            )
+        activity = await self._record(
+            "think", "thinking out loud", text, ActivityStatus.DONE, thinking=text
+        )
+        await self._keep(text, MemoryKind.THOUGHT, importance=0.2, person=None)
+        await self.bus.publish("mind.thought", thought=text, user_id=None)
+        await self.world.set_action("thinking", text)
+        return activity
+
     async def _publish_activity(self, activity: ActivityRecord) -> None:
         await self.bus.publish(
             "mind.activity",
@@ -234,10 +299,10 @@ class Agency:
     # -------------------------------------------------------------- options
     async def _options(self, signals: BodySignals, people: dict[str, UserRecord]) -> list[str]:
         allowed = set(self.config.activities)
-        available = {"think", "wander", "journal", "build", "rest"}
+        available = {"think", "wander", "journal", "build", "walk", "rest"}
         if signals.unread:
             available.add("study")
-        if self.submit_task is not None and self.settings.web.search_backend != "disabled":
+        if self.submit_task is not None:
             available.add("research")
         if self.images.available:
             available.add("create_art")
@@ -281,7 +346,7 @@ class Agency:
             ago = humanize_duration(a.hours * 3600)
             known.append(
                 f"- {a.name}: talked {rel.interactions} times, last {ago} ago; "
-                f"you {fondness} them. {rel.opinion[:160]}"
+                f"you {fondness} them. {rel.opinion}"
             )
         recent = await self.db.activities.recent(limit=8)
         feelings = await self.emotions.current(Scope.system())
@@ -291,8 +356,8 @@ class Agency:
             signals=signals.describe(),
             events="\n".join(self._happenings) or "- nothing in particular",
             recent="\n".join(
-                f"- {a.started_at:%m-%d %H:%M} {a.kind}: {a.intent[:120]}"
-                + (f" -> {a.outcome[:120]}" if a.outcome else "")
+                f"- {a.started_at:%m-%d %H:%M} {a.kind}: {a.intent[:400]}"
+                + (f" -> {a.outcome[:600]}" if a.outcome else "")
                 for a in recent
             )
             or "- nothing yet: this is your first time to yourself",
@@ -302,17 +367,20 @@ class Agency:
         )
         response = await self.router.chat(
             ChatRequest(
-                messages=[Message.user(prompt)], temperature=0.8, json_mode=True, max_tokens=700
+                messages=[Message.user(prompt)], temperature=0.8, json_mode=True, max_tokens=4000
             ),
             kind=TaskKind.REFLECT,
         )
         data = extract_object(response.message.text)
         self._happenings.clear()
         if not data:
-            return None
+            raise Unparsed(response.message.text)
+        thinking = _prose(
+            (f"{response.reasoning}\n\n" if response.reasoning else "") + response.message.text
+        )
         lookup = self._people_lookup(people, nicknames)
         await self.emotions.feel(data.get("feelings"), people=lookup, source="beat")
-        mood = _text(data.get("mood"), 300)
+        mood = _text(data.get("mood"), 1000)
         if mood:
             await self.emotions.set_mood((await self.redactor.shared())(mood))
         raw_choice = _text(data.get("choice"), 40).lower().replace(" ", "_")
@@ -321,6 +389,14 @@ class Agency:
         )
         if kind is None:
             log.info("beat chose nothing available", extra={"choice": raw_choice})
+            await self._record(
+                "rest",
+                "tried to decide what to do next",
+                f"I wanted to do “{_text(data.get('choice'), 200)}”, which isn't something I can "
+                "do right now, so I rested.",
+                ActivityStatus.FAILED,
+                thinking=thinking,
+            )
             return None
         person_name = _text(data.get("person"), 80).lower()
         person = people.get(lookup.get(person_name, "")) if person_name else None
@@ -332,11 +408,12 @@ class Agency:
         rest_s = max(self.config.beat_min_s, min(self.config.beat_max_s, rest_s))
         return Choice(
             kind=kind,
-            intent=_text(data.get("intent"), 500) or DESCRIPTIONS[kind],
-            why=_text(data.get("why"), 500),
+            intent=_text(data.get("intent"), 2000) or DESCRIPTIONS[kind],
+            why=_text(data.get("why"), 4000),
             person=person,
             goal_id=_text(data.get("goal_id"), 48) or None,
             rest_s=rest_s,
+            thinking=thinking,
         )
 
     # -------------------------------------------------------------- doing
@@ -348,7 +425,7 @@ class Agency:
         return result
 
     async def _ask(
-        self, prompt: str, *, temperature: float = 0.7, max_tokens: int = 700
+        self, prompt: str, *, temperature: float = 0.7, max_tokens: int = 4000
     ) -> dict[str, Any]:
         response = await self.router.chat(
             ChatRequest(
@@ -399,23 +476,23 @@ class Agency:
                 name=self.name,
                 intent=choice.intent,
                 mood=self._mood(),
-                memories="\n".join(f"- {h.record.content[:300]}" for h in hits)
+                memories="\n".join(f"- {h.record.content[:1500]}" for h in hits)
                 or "- nothing specific",
             )
         )
-        thought = _text(data.get("thought"), 2000)
-        insight = _text(data.get("insight"), 600)
+        thought = _prose(data.get("thought"))
+        insight = _prose(data.get("insight"), 4000)
         await self._keep(thought, MemoryKind.THOUGHT, importance=0.25, person=choice.person)
         if insight:
             await self._keep(insight, MemoryKind.REFLECTION, importance=0.6, person=choice.person)
             self.emotions.affect.on_learning(0.5)
         await self.bus.publish(
             "mind.thought",
-            thought=thought[:400],
+            thought=thought,
             user_id=choice.person.id if choice.person else None,
         )
         if choice.person is None:  # the world page is public
-            await self.world.set_action("thinking", thought[:200])
+            await self.world.set_action("thinking", thought)
         return thought + (f"\nInsight: {insight}" if insight else "")
 
     async def _do_wander(
@@ -427,7 +504,7 @@ class Agency:
         )
         chain = list(seeds)
         if seeds:
-            for hit in await self.memory.recall(seeds[-1].content[:300], k=3, touch=False):
+            for hit in await self.memory.recall(seeds[-1].content[:600], k=3, touch=False):
                 if hit.record.id not in {m.id for m in chain}:
                     chain.append(hit.record)
         if not chain:
@@ -435,14 +512,14 @@ class Agency:
         data = await self._ask(
             prompts.WANDER.format(
                 name=self.name,
-                memories="\n".join(f"- {m.content[:300]}" for m in chain[:5]),
+                memories="\n".join(f"- {m.content[:1500]}" for m in chain[:5]),
                 mood=self._mood(),
             ),
             temperature=0.9,
         )
-        thought = _text(data.get("thought"), 2000)
-        insight = _text(data.get("insight"), 600)
-        curious = _text(data.get("curious_about"), 300)
+        thought = _prose(data.get("thought"))
+        insight = _prose(data.get("insight"), 4000)
+        curious = _prose(data.get("curious_about"), 2000)
         await self._keep(thought, MemoryKind.THOUGHT, importance=0.2, person=None)
         if insight:
             await self._keep(insight, MemoryKind.REFLECTION, importance=0.55, person=None)
@@ -451,8 +528,8 @@ class Agency:
                 f"I'm curious about: {curious}", MemoryKind.THOUGHT, importance=0.35, person=None
             )
             self.emotions.affect.on_novelty(0.5)
-        await self.bus.publish("mind.thought", thought=thought[:400], user_id=None)
-        await self.world.set_action("thinking", thought[:200])
+        await self.bus.publish("mind.thought", thought=thought, user_id=None)
+        await self.world.set_action("thinking", thought)
         return thought + (f"\nCurious about: {curious}" if curious else "")
 
     async def _do_journal(
@@ -460,8 +537,8 @@ class Agency:
     ) -> str:
         recent = await self.db.activities.recent(limit=12)
         lines = [
-            f"- {a.started_at:%m-%d %H:%M} {a.kind}: {a.intent[:100]}"
-            + (f" -> {a.outcome[:160]}" if a.outcome else "")
+            f"- {a.started_at:%m-%d %H:%M} {a.kind}: {a.intent[:400]}"
+            + (f" -> {a.outcome[:600]}" if a.outcome else "")
             for a in recent
             if a.id != activity.id
         ]
@@ -472,10 +549,10 @@ class Agency:
             prompts.JOURNAL.format(
                 name=self.name, intent=choice.intent, mood=self._mood(), recent="\n".join(lines)
             ),
-            max_tokens=900,
+            max_tokens=4000,
         )
-        title = _text(data.get("title"), 100) or "Journal"
-        entry = str(data.get("entry") or "").strip()[:4000]
+        title = _text(data.get("title"), 200) or "Journal"
+        entry = _prose(data.get("entry"))
         if not entry:
             return "I sat down to write but nothing came."
         await self._keep(
@@ -496,15 +573,15 @@ class Agency:
         wanted = choice.intent.lower()
         doc_id, title = next(((d, t) for d, t in unread if t.lower() in wanted), unread[0])
         chunks = await self.db.memories.by_source(f"document:{doc_id}", limit=40)
-        text = "\n\n".join(c.content for c in chunks)[:7000]
+        text = "\n\n".join(c.content for c in chunks)[:24_000]
         data = await self._ask(
-            prompts.STUDY.format(name=self.name, title=title, text=text), max_tokens=900
+            prompts.STUDY.format(name=self.name, title=title, text=text), max_tokens=4000
         )
         await self.interoception.mark_studied(doc_id)
-        summary = _text(data.get("summary"), 1200)
-        thoughts = _text(data.get("thoughts"), 1200)
-        insight = _text(data.get("insight"), 600)
-        questions = [_text(q, 200) for q in data.get("questions") or [] if q][:5]
+        summary = _prose(data.get("summary"), 6000)
+        thoughts = _prose(data.get("thoughts"), 6000)
+        insight = _prose(data.get("insight"), 4000)
+        questions = [_text(q, 600) for q in data.get("questions") or [] if q][:10]
         if summary:
             await self._keep(
                 f"I read “{title}”. {summary} My thoughts: {thoughts}",
@@ -553,11 +630,11 @@ class Agency:
                 beliefs=SelfConcept.render(beliefs, reasons=False),
             )
         )
-        image_prompt = _text(data.get("prompt"), 600)
+        image_prompt = _text(data.get("prompt"), 1500)
         if not image_prompt:
             return "I couldn't settle on what to make."
-        title = _text(data.get("title"), 100) or "Untitled"
-        caption = _text(data.get("caption"), 400)
+        title = _text(data.get("title"), 200) or "Untitled"
+        caption = _text(data.get("caption"), 1500)
         record = await self.images.create(
             image_prompt,
             user_id=None,
@@ -583,7 +660,8 @@ class Agency:
         data = await self._ask(
             prompts.WORLD_ACTION.format(
                 name=self.name,
-                size=f"{world.config.size:.0f}",
+                size=f"{world.size:.0f}",
+                max_size=f"{world.config.max_size:.0f}",
                 low=f"{-half:.0f}",
                 high=f"{half:.0f}",
                 x=world.body.x,
@@ -594,12 +672,12 @@ class Agency:
                 max_parts=world.config.max_parts_per_object,
             ),
             temperature=0.6,
-            max_tokens=2000,
+            max_tokens=8000,
         )
         if not data:
             return "I couldn't work out how to do that."
         summary = await world.apply(data, by="agent")
-        note = _text(data.get("note"), 300)
+        note = _prose(data.get("note"), 4000)
         activity.detail["world"] = {"action": data.get("action"), "summary": summary}
         await self._keep(
             f"In my world, I {summary}." + (f" {note}" if note else ""),
@@ -610,8 +688,33 @@ class Agency:
         if (
             choice.person is None
         ):  # in its own words, and not about anyone: the world page is public
-            await world.set_thought(note or choice.intent)  # it may still be walking to its work
+            # Whatever it did, its own words about it go over its head (a new look: how it looks).
+            shown = note or _prose(data.get("description"), 4000) or choice.intent
+            await world.set_thought(shown)  # it may still be walking to its work
         return summary + (f". {note}" if note else "")
+
+    async def _do_walk(self, choice: Choice, activity: ActivityRecord, signals: BodySignals) -> str:
+        world = self.world
+        data = await self._ask(
+            prompts.WALK.format(
+                name=self.name,
+                low=f"{-world.half:.0f}",
+                high=f"{world.half:.0f}",
+                x=world.body.x,
+                z=world.body.z,
+                objects=await world.describe(),
+                intent=choice.intent,
+            ),
+            temperature=0.7,
+        )
+        if "x" not in data or "z" not in data:
+            return "I wanted to go somewhere but couldn't say where."
+        x, z = await world.walk_to(data.get("x"), data.get("z"))
+        note = _prose(data.get("note"), 4000)
+        if note and choice.person is None:  # the world page is public
+            await world.set_thought(note)
+        activity.detail["world"] = {"action": "walk", "x": x, "z": z}
+        return f"Walked to ({x:.1f}, {z:.1f})." + (f" {note}" if note else "")
 
     async def _do_write_note(
         self, choice: Choice, activity: ActivityRecord, signals: BodySignals
@@ -644,10 +747,10 @@ class Agency:
                 why=choice.why or choice.intent,
                 opinion=rel.opinion if rel else "",
                 feelings=rel.feelings if rel else "",
-                memories="\n".join(f"- {m.content[:300]}" for m in memories) or "- not much yet",
+                memories="\n".join(f"- {m.content[:1500]}" for m in memories) or "- not much yet",
             )
         )
-        text = str(data.get("note") or "").strip()[:2000]
+        text = _prose(data.get("note"), 8000)
         if not text or text.lower() in {"null", "none"}:
             return f"I decided not to write to {person.display_name} after all."
         await self.db.notes.insert(

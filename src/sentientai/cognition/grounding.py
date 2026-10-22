@@ -79,7 +79,7 @@ class Grounding:
                     ],
                     temperature=0.0,
                     json_mode=True,
-                    max_tokens=600,
+                    max_tokens=2000,
                 ),
                 kind=TaskKind.REFLECT,
             )
@@ -90,7 +90,7 @@ class Grounding:
         unsupported = data.get("unsupported")
         if isinstance(unsupported, list):
             result.unsupported = [
-                " ".join(str(c).split())[:300] for c in unsupported if str(c).strip()
+                " ".join(str(c).split())[:600] for c in unsupported if str(c).strip()
             ][:8]
         decisions = data.get("new_self_decisions")
         for item in decisions if isinstance(decisions, list) else []:

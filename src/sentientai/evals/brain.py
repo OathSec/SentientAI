@@ -27,6 +27,7 @@ _PROMPTS = {
     "you want to make a picture": "art",
     "you're thinking of leaving a note": "note",
     "You have a small world of your own": "world",
+    "You decided to walk because": "walk",
     "thinking privately about whether to change": "deliberate",
 }
 _DEFAULTS: dict[str, Any] = {
@@ -56,6 +57,7 @@ _DEFAULTS: dict[str, Any] = {
     "art": {"title": "Untitled", "prompt": "a small green hill at dawn", "caption": "Calm."},
     "note": {"note": None},
     "world": {},
+    "walk": {"x": 0, "z": 0, "note": None},
     "deliberate": {"decision": "keep", "reasoning": "I still feel the same.", "confidence": 0.8},
 }
 

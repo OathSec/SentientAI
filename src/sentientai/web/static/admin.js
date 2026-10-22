@@ -7,8 +7,8 @@
   function say(text, kind) { notice(msg, text, kind); window.scrollTo(0, 0); }
   async function act(work) { try { await work(); } catch (e) { say(e.message, "error"); } }
 
-  const TABS = { users: "People", invites: "Invites", safety: "Safety", audit: "Audit log", memory: "Memory", tasks: "Tasks" };
-  const renderers = { users, invites, safety, audit, memory, tasks };
+  const TABS = { users: "People", invites: "Invites", safety: "Safety", audit: "Audit log", memory: "Memory", tasks: "Tasks", server: "Server" };
+  const renderers = { users, invites, safety, audit, memory, tasks, server };
   let current = "users", poll = null;
 
   function tabs() {
@@ -18,6 +18,12 @@
     }
   }
   function open(key) { current = key; tabs(); notice(msg, ""); if (poll) clearInterval(poll); poll = null; renderers[key](); }
+
+  function server() {
+    const box = el("div");
+    clear(panel).append(el("div", { class: "card" }, el("h2", {}, "Server"), box));
+    poll = Hardware.mount(box, 5000);
+  }
 
   async function users() {
     const data = await api("/api/admin/users");

@@ -24,6 +24,10 @@ log = get_logger(__name__)
 
 AVATAR_KEY = "world.avatar"
 BODY_KEY = "world.body"
+SIZE_KEY = "world.size"
+THOUGHT_CHARS = (
+    4000  # the bubble over its head scrolls; nothing Fuzzy thinks is cut short for display
+)
 _TICK_S = 0.25
 
 
@@ -48,17 +52,21 @@ class World:
         self.clock = clock or SystemClock()
         self.avatar = Avatar()
         self.body = Body()
+        self.size = config.size
         self._lock = asyncio.Lock()
         self._arrived = asyncio.Event()
 
     @property
     def half(self) -> float:
-        return self.config.size / 2
+        return self.size / 2
 
     def _coord(self, value: Any) -> float:
         return round(_clamp(value, -self.half + 0.5, self.half - 0.5, 0.0), 2)
 
     async def load(self) -> None:
+        raw_size = await self.db.state.get(SIZE_KEY)
+        if isinstance(raw_size, int | float):
+            self.size = _clamp(raw_size, self.config.size, self.config.max_size, self.config.size)
         raw_avatar = await self.db.state.get(AVATAR_KEY)
         if isinstance(raw_avatar, dict):
             self.avatar = Avatar.model_validate(raw_avatar)
@@ -83,7 +91,8 @@ class World:
 
     async def snapshot(self) -> dict[str, Any]:
         return {
-            "size": self.config.size,
+            "size": self.size,
+            "max_size": max(self.config.max_size, self.size),
             "objects": [o.model_dump(mode="json") for o in await self.objects()],
             "avatar": self.avatar.model_dump(mode="json"),
             "body": self.body.model_dump(mode="json"),
@@ -95,14 +104,14 @@ class World:
             return "Nothing yet: the ground is empty."
         return "\n".join(
             f"- [{o.id}] {o.name} at ({o.x:.1f}, {o.z:.1f}), {len(o.parts)} parts"
-            + (f": {o.description[:140]}" if o.description else "")
+            + (f": {o.description[:400]}" if o.description else "")
             for o in objects
         )
 
     def describe_avatar(self) -> str:
         if not self.avatar.parts:
             return "You haven't designed how you look yet; you appear as a plain marker."
-        return f"You look like this (your own design): {self.avatar.description[:300]}"
+        return f"You look like this (your own design): {self.avatar.description}"
 
     # ------------------------------------------------------------ changes
     async def build(
@@ -203,6 +212,20 @@ class World:
         await self._emit("world.avatar", avatar=self.avatar.model_dump(mode="json"))
         return self.avatar
 
+    async def expand(self, size: Any, *, by: str = "agent") -> float:
+        """Make the ground bigger (it never shrinks: that would strand what is built on it)."""
+
+        wanted = _clamp(size, 0.0, self.config.max_size, self.size)
+        if wanted <= self.size:
+            raise WorldError(
+                f"your world is already {self.size:.0f} m across; ask for more than that"
+            )
+        old, self.size = self.size, round(wanted, 1)
+        await self.db.state.set(SIZE_KEY, self.size)
+        await self.audit.record("world.expanded", actor=by, before=old, after=self.size)
+        await self._emit("world.size", size=self.size)
+        return self.size
+
     async def walk_to(self, x: Any, z: Any) -> tuple[float, float]:
         target = [self._coord(x), self._coord(z)]
         self.body.target = target
@@ -216,13 +239,13 @@ class World:
             self.body.target = None  # stopping to do something else
         self.body.action = action
         if thought is not None:
-            self.body.thought = clean_text(thought, 240)
+            self.body.thought = clean_text(thought, THOUGHT_CHARS)
         await self._emit_body()
 
     async def set_thought(self, thought: str) -> None:
         """Show what Fuzzy is thinking without interrupting what it is doing."""
 
-        self.body.thought = clean_text(thought, 240)
+        self.body.thought = clean_text(thought, THOUGHT_CHARS)
         await self._emit_body()
 
     async def _emit_body(self) -> None:
@@ -260,6 +283,10 @@ class World:
         if kind == "remove":
             obj = await self.remove(str(action.get("object_id", "")), by=by)
             return f"removed {obj.name}"
+        if kind == "expand":
+            old = self.size
+            new = await self.expand(action.get("size"), by=by)
+            return f"made my world bigger, from {old:.0f} m to {new:.0f} m across"
         if kind == "walk":
             x, z = await self.walk_to(action.get("x", 0), action.get("z", 0))
             return f"walked to ({x:.1f}, {z:.1f})"

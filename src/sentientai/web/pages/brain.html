@@ -11,22 +11,52 @@
 <header class="top" id="top"></header>
 <main class="wide">
   <div class="row spread">
-    <h1 id="title">Brain</h1>
+    <h1 id="title" class="nomargin">Brain</h1>
     <span class="small muted" id="live-state"></span>
   </div>
   <div id="banner"></div>
-  <div class="grid">
-    <section class="card"><h2>How it feels</h2><div id="feelings"></div></section>
-    <section class="card"><h2>What it senses</h2><div id="signals"></div></section>
-    <section class="card"><h2>Who it has decided to be</h2><div id="beliefs"></div></section>
-    <section class="card"><h2>Goals</h2><div id="goals"></div></section>
+  <div class="tabs" role="tablist" id="tabs">
+    <button role="tab" data-tab="now" aria-selected="true">Right now</button>
+    <button role="tab" data-tab="self" aria-selected="false">Self</button>
+    <button role="tab" data-tab="doing" aria-selected="false">Doing</button>
+    <button role="tab" data-tab="thinking" aria-selected="false">Thinking</button>
+    <button role="tab" data-tab="memory" aria-selected="false">Memory</button>
+    <button role="tab" data-tab="live" aria-selected="false">Live</button>
+    <button role="tab" data-tab="people" aria-selected="false" class="hidden" id="tab-people">People</button>
+    <button role="tab" data-tab="system" aria-selected="false" class="hidden" id="tab-system">System</button>
   </div>
-  <div class="grid">
-    <section class="card"><h2>What it has been doing</h2><div id="activities"></div></section>
-    <section class="card"><h2>What it has been thinking</h2><div id="thoughts"></div></section>
-  </div>
-  <div class="grid">
-    <section class="card">
+
+  <section class="panel" data-panel="now">
+    <div class="cols">
+      <div class="card"><h2>Doing now</h2><div id="now"></div></div>
+      <div class="card"><h2>How it feels</h2><div id="feelings"></div></div>
+      <div class="card"><h2>What it senses</h2><div id="signals"></div></div>
+      <div class="card"><h2>Goals</h2><div id="goals"></div></div>
+    </div>
+  </section>
+
+  <section class="panel hidden" data-panel="self">
+    <div class="cols two">
+      <div class="card"><h2>Who it has decided to be</h2><div id="beliefs"></div></div>
+      <div class="card"><h2>Its story so far</h2><div id="story"></div></div>
+    </div>
+  </section>
+
+  <section class="panel hidden" data-panel="doing">
+    <div class="card"><h2>What it has been doing</h2><div id="activities"></div></div>
+  </section>
+
+  <section class="panel hidden" data-panel="thinking">
+    <p class="small muted">The thinking behind each choice, in its own words, and what it has been mulling over. Nothing is trimmed.</p>
+    <div class="cols two">
+      <div class="card"><h2>How it decided things</h2><div id="reasoning"></div></div>
+      <div class="card"><h2>Thoughts and reflections</h2><div id="thoughts"></div></div>
+    </div>
+    <div id="talk-thinking" class="card hidden"><h2>Thinking behind its replies <span class="tag">operator</span></h2><div id="talk"></div></div>
+  </section>
+
+  <section class="panel hidden" data-panel="memory">
+    <div class="card">
       <h2>What it remembers</h2>
       <div id="memory-stats" class="small muted"></div>
       <form id="search" class="row hidden mt-xs">
@@ -34,18 +64,26 @@
         <button type="submit" class="secondary">Search</button>
       </form>
       <div id="memory-results"></div>
-    </section>
-    <section class="card"><h2>Live</h2><pre class="feed" id="feed"></pre></section>
-  </div>
-  <div id="admin" class="hidden">
-    <h2>Operator view</h2>
-    <div class="grid">
-      <section class="card"><h2>People it knows</h2><div id="people"></div></section>
-      <section class="card"><h2>Attention and work</h2><div id="work"></div></section>
     </div>
-  </div>
+  </section>
+
+  <section class="panel hidden" data-panel="live">
+    <div class="card"><h2>Live</h2><pre class="feed tall" id="feed"></pre></div>
+  </section>
+
+  <section class="panel hidden" data-panel="people">
+    <div class="card"><h2>People it knows</h2><div id="people"></div></div>
+  </section>
+
+  <section class="panel hidden" data-panel="system">
+    <div class="cols two">
+      <div class="card"><h2>Attention and work</h2><div id="work"></div></div>
+      <div class="card"><h2>Server</h2><div id="hardware"><p class="muted">Loading…</p></div></div>
+    </div>
+  </section>
 </main>
 <script src="/static/app.js"></script>
+<script src="/static/hardware.js"></script>
 <script src="/static/brain.js"></script>
 </body>
 </html>

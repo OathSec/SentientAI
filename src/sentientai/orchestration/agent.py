@@ -394,7 +394,7 @@ class CognitiveAgent:
         tools = self.registry.schemas(
             names=sorted(allowed) if allowed is not None else None, autonomous=ctx.autonomous
         )
-        nudged = False
+        nudges = 0
         while True:
             guard.begin_step()
             tier = prefer or self.router.select(kind, ChatRequest(messages=outcome.transcript)).tier
@@ -440,14 +440,25 @@ class CognitiveAgent:
                 continue
 
             answer = message.text.strip()
-            if not answer and not nudged:
-                nudged = True
-                outcome.transcript.append(Message.user("Please give your final answer now."))
+            if not answer and nudges < 2:
+                nudges += 1
+                outcome.transcript.pop()  # an empty turn would teach it to stay silent
+                outcome.transcript.append(
+                    Message.user(
+                        "Your last turn had no reply in it. Say your reply now, in plain text."
+                    )
+                )
                 continue
             await self.audit.record(
                 "agent.answer", task_id=ctx.task_id, tier=str(response.tier), answer=answer
             )
-            return answer or "(no answer produced)", response
+            if not answer:
+                # Say what happened rather than a placeholder: the thinking used up its room.
+                answer = (
+                    "I started thinking about that and ran out of room before I could put it into "
+                    "words. Ask me again and I'll try once more."
+                )
+            return answer, response
 
     async def _assess(
         self,

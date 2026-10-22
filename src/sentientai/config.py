@@ -57,7 +57,7 @@ class ModelEndpointConfig(BaseModel):
     context_window: int = Field(default=8192, ge=512)
     max_output_tokens: int = Field(default=2048, ge=16)
     temperature: float = Field(default=0.3, ge=0.0, le=2.0)
-    timeout_s: float = Field(default=180.0, gt=0)
+    timeout_s: float = Field(default=900.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
     supports_tools: bool = True
     device: str | None = Field(
@@ -97,9 +97,10 @@ class ModelsConfig(BaseModel):
         default_factory=lambda: ModelEndpointConfig(
             base_url="http://127.0.0.1:8002/v1",
             model="fast",
-            context_window=4096,  # per slot: two slots share an 8192-token server context
-            max_output_tokens=1024,
+            context_window=8192,  # per slot: two slots share a 16384-token server context
+            max_output_tokens=2048,
             temperature=0.2,
+            timeout_s=900.0,
             device="cuda (GTX 1660 Ti)",
         )
     )
@@ -107,8 +108,9 @@ class ModelsConfig(BaseModel):
         default_factory=lambda: ModelEndpointConfig(
             base_url="http://127.0.0.1:8000/v1",
             model="heavy",
-            context_window=8192,
-            max_output_tokens=2048,
+            context_window=16384,
+            max_output_tokens=4096,
+            timeout_s=3600.0,
             device="cuda (RTX 2070)",
         )
     )
@@ -162,12 +164,12 @@ class MemoryConfig(BaseModel):
 class LimitsConfig(BaseModel):
     """Deterministic loop breakers. Every autonomous run is bounded by all of these."""
 
-    max_steps: int = Field(default=24, ge=1)
+    max_steps: int = Field(default=60, ge=1)
     max_tool_calls: int = Field(default=48, ge=0)
-    max_wall_time_s: float = Field(default=900.0, gt=0)
+    max_wall_time_s: float = Field(default=7200.0, gt=0)
     max_repeat_calls: int = Field(default=3, ge=1)
     max_consecutive_failures: int = Field(default=4, ge=1)
-    max_tokens_per_task: int = Field(default=250_000, ge=1000)
+    max_tokens_per_task: int = Field(default=1_000_000, ge=1000)
     llm_requests_per_minute: float = Field(default=120.0, gt=0)
     tool_calls_per_minute: float = Field(default=120.0, gt=0)
     max_tool_output_chars: int = Field(default=12_000, ge=256)
@@ -341,6 +343,7 @@ class MindConfig(BaseModel):
             "research",
             "create_art",
             "build",
+            "walk",
             "write_note",
             "reconsider",
             "pursue_goal",
@@ -365,8 +368,13 @@ class ImagesConfig(BaseModel):
 
 
 class WorldConfig(BaseModel):
-    size: float = Field(default=40.0, ge=10, le=500, description="Side of the square world (m).")
-    max_objects: int = Field(default=150, ge=1)
+    size: float = Field(
+        default=40.0, ge=10, le=2000, description="Starting side of the square world (m)."
+    )
+    max_size: float = Field(
+        default=400.0, ge=10, le=2000, description="Most Fuzzy may expand its world to (m)."
+    )
+    max_objects: int = Field(default=500, ge=1)
     max_parts_per_object: int = Field(default=40, ge=1, le=200)
     walk_speed: float = Field(default=1.2, gt=0, description="Metres per second.")
 
@@ -386,6 +394,9 @@ class AccountsConfig(BaseModel):
     daily_messages: int = Field(default=200, ge=0, description="Per-user chat quota (0 = none).")
     daily_images: int = Field(default=10, ge=0)
     daily_teach_bytes: int = Field(default=20_000_000, ge=0)
+    chat_timeout_s: float = Field(
+        default=7200.0, gt=0, description="How long a reply may take before it is given up on."
+    )
     public_pages: bool = Field(
         default=False, description="Let visitors who are not signed in view the brain and world."
     )

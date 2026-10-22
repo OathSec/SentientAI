@@ -101,10 +101,10 @@ class BrainView:
         feelings = await c.emotions.current(scope)
         beliefs = await c.selfhood.beliefs()
         pending = await c.selfhood.pending()
-        activities = await c.db.activities.recent(limit=40, scope=scope)
+        activities = await c.db.activities.recent(limit=60, scope=scope)
         memories = await c.db.memories.list(
             kinds=[MemoryKind.THOUGHT, MemoryKind.REFLECTION],
-            limit=25,
+            limit=40,
             scope=Scope.system() if viewer.admin else Scope.for_user(viewer.user_id),
         )
         goals = await c.goals.active(scope)
@@ -152,6 +152,7 @@ class BrainView:
                     "intent": redact(a.intent),
                     "reason": redact(a.reason),
                     "outcome": redact(a.outcome),
+                    "thinking": redact(str(a.detail.get("thinking") or "")),
                     "status": a.status.value,
                     "private": a.user_id is not None,
                     "at": a.started_at.isoformat(),
@@ -182,6 +183,12 @@ class BrainView:
                 "by_kind": mem_stats["active_by_kind"],
             },
             "body": {"action": body.action, "thought": redact(body.thought)},
+            "world": {
+                "size": c.world.size,
+                "max_size": c.world.config.max_size,
+                "objects": len(await c.world.objects()),
+            },
+            "next_activity_in_s": max(0.0, rt._next_beat - c.clock.monotonic()),
             "viewer": {"admin": viewer.admin, "signed_in": viewer.user_id is not None},
         }
         if viewer.admin:
@@ -202,7 +209,6 @@ class BrainView:
             data["running_tasks"] = list(rt._running)
             data["tasks"] = await c.db.tasks.count_by_status()
             data["pending_approvals"] = len(await c.approvals.pending())
-            data["next_beat_in_s"] = max(0.0, rt._next_beat - c.clock.monotonic())
             data["models"] = await c.router.health()
         return data
 

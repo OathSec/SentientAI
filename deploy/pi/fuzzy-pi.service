@@ -1,0 +1,14 @@
+[Unit]
+Description=Fuzzy watchdog and kill-switch button
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/fuzzy-pi.env
+ExecStart=/usr/bin/python3 /opt/fuzzy-pi/fuzzy-pi.py
+Restart=always
+RestartSec=5
+User=pi
+
+[Install]
+WantedBy=multi-user.target

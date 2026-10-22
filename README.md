@@ -43,6 +43,7 @@ including the model servers, is in [`deploy/docker-compose.yml`](deploy/docker-c
 | [docs/cognition.md](docs/cognition.md) | Self-concept, feelings, relationships, what Fuzzy does on its own, grounding, affect, attention, memory dynamics |
 | [docs/safety.md](docs/safety.md) | Risk policy, approvals, loop breakers, kill switch, sandbox, audit chain, and the public site's accounts and privacy model |
 | [docs/hardware.md](docs/hardware.md) | RTX 2070 + GTX 1660 Ti serving plan, llama.cpp builds, VRAM budget, image generation caveats, storage tiers |
+| [docs/raspberry-pi.md](docs/raspberry-pi.md) | Using a Raspberry Pi 4: watchdog, physical kill-switch button, status LEDs, front door, backups |
 | [docs/operations.md](docs/operations.md) | Install, running the public site, people and invites, CLI cheat sheet, monitoring, backup/restore, upgrades, incident playbook |
 
 ---

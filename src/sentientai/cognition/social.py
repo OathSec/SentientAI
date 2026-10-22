@@ -129,7 +129,7 @@ class Relationships:
         if rel is None:
             return None
         transcript = "\n".join(
-            f"{user.display_name if role == 'user' else name}: {text[:1200]}"
+            f"{user.display_name if role == 'user' else name}: {text[:6000]}"
             for role, text in exchange[-12:]
         )
         prompt = prompts.APPRAISE_RELATIONSHIP.format(
@@ -147,7 +147,7 @@ class Relationships:
         )
         response = await self.router.chat(
             ChatRequest(
-                messages=[Message.user(prompt)], temperature=0.5, json_mode=True, max_tokens=500
+                messages=[Message.user(prompt)], temperature=0.5, json_mode=True, max_tokens=2500
             ),
             kind=TaskKind.REFLECT,
         )
@@ -156,8 +156,8 @@ class Relationships:
             return rel
         async with self._locks[user.id]:
             rel = await self.repo.get(user.id) or rel  # it may have changed while we thought
-            opinion = " ".join(str(data.get("opinion") or "").split())[:600]
-            feelings = " ".join(str(data.get("feelings") or "").split())[:300]
+            opinion = " ".join(str(data.get("opinion") or "").split())[:3000]
+            feelings = " ".join(str(data.get("feelings") or "").split())[:1500]
             if opinion:
                 rel.opinion = opinion
             if feelings:
@@ -178,7 +178,7 @@ class Relationships:
                     "at": now.isoformat(),
                     "affinity": round(rel.affinity, 3),
                     "trust": round(rel.trust, 3),
-                    "opinion": rel.opinion[:200],
+                    "opinion": rel.opinion,
                 },
             ][-60:]
             await self.repo.upsert(rel)
@@ -197,7 +197,7 @@ class Relationships:
                 user_id=user.id,
                 affinity=round(rel.affinity, 3),
                 trust=round(rel.trust, 3),
-                opinion=rel.opinion[:300],
+                opinion=rel.opinion,
             )
         return rel
 

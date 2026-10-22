@@ -39,7 +39,8 @@ class WorldLook(Tool[LookArgs]):
     async def run(self, args: LookArgs, ctx: ToolContext) -> ToolResult:
         body = self.world.body
         return ToolResult.success(
-            f"Your world is {self.world.config.size:.0f} m across. You are at "
+            f"Your world is {self.world.size:.0f} m across (it can grow to "
+            f"{self.world.config.max_size:.0f} m). You are at "
             f"({body.x:.1f}, {body.z:.1f}), {body.action}.\n{self.world.describe_avatar()}\n"
             f"Things here:\n{await self.world.describe()}"
         )
@@ -164,6 +165,28 @@ class WorldWalk(Tool[WalkArgs]):
         return ToolResult.success(f"Walking to ({x}, {z}).")
 
 
+class ExpandArgs(ToolArgs):
+    size: float = Field(gt=0, description="New side length of the square ground, in metres.")
+
+
+class WorldExpand(Tool[ExpandArgs]):
+    name = "world_expand"
+    description = "Make the ground of your world bigger, to make room."
+    args_model = ExpandArgs
+    autonomous_only = True  # Fuzzy's world and body are Fuzzy's own choices
+    tags = ("world",)
+
+    def __init__(self, world: World) -> None:
+        self.world = world
+
+    async def run(self, args: ExpandArgs, ctx: ToolContext) -> ToolResult:
+        try:
+            size = await self.world.expand(args.size, by=_who(ctx))
+        except WorldError as exc:
+            return ToolResult.failure(str(exc))
+        return ToolResult.success(f"Your world is now {size:.0f} m across.")
+
+
 class AvatarArgs(ToolArgs):
     description: str = Field(min_length=3, max_length=600, description="How you look, and why.")
     parts: list[dict[str, Any]] = Field(
@@ -249,6 +272,7 @@ def world_tools(world: World) -> list[Tool[Any]]:
         WorldModify(world),
         WorldRemove(world),
         WorldWalk(world),
+        WorldExpand(world),
         AvatarDesign(world),
     ]
 
