@@ -116,7 +116,7 @@ services:
     image: caddy:2
     depends_on: [sentientai]
     environment:
-      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in deploy/.env}
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}   # only used by the `web` profile
     ports:
       - "80:80"
       - "443:443"
