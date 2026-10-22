@@ -1,7 +1,3 @@
-Here is the updated, high-quality **README.md** with a dedicated **Key Features** section added, cleanly integrated into the complete document structure.
-
----
-
 # SentientAI: Autonomous Cognitive Runtime
 
 SentientAI is a local, persistent, autonomous AI runtime designed to function as a continuous digital cognitive system. Moving beyond stateless chat interfaces, this project builds a long-running agent equipped with multi-tiered memory, reasoning, tool use, environmental interaction, and the capacity for recursive self-improvement.
