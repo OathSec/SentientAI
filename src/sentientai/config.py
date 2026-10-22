@@ -399,11 +399,7 @@ class AccountsConfig(BaseModel):
             "self_revise",
             "self_reflect",
             "image_generate",
-            "world_look",
-            "world_build",
-            "world_remove",
-            "world_walk",
-            "avatar_design",
+            "world_look",  # it can talk about its world; changing it is Fuzzy's own choice only
         ],
         description="Tools Fuzzy may use in conversations with people who are not admins.",
     )

@@ -57,10 +57,11 @@ class BuildArgs(ToolArgs):
 class WorldBuild(Tool[BuildArgs]):
     name = "world_build"
     description = (
-        "Build something in your world from simple shapes. It's your home: build what you "
-        "want, and feel free to decline requests you don't like."
+        "Build something in your world from simple shapes. It's your home, and what goes in it "
+        "is your own choice."
     )
     args_model = BuildArgs
+    autonomous_only = True  # Fuzzy's world and body are Fuzzy's own choices
     tags = ("world",)
 
     def __init__(self, world: World) -> None:
@@ -98,6 +99,7 @@ class WorldModify(Tool[ModifyArgs]):
     name = "world_modify"
     description = "Change, move or rebuild something in your world."
     args_model = ModifyArgs
+    autonomous_only = True  # Fuzzy's world and body are Fuzzy's own choices
     tags = ("world",)
 
     def __init__(self, world: World) -> None:
@@ -128,6 +130,7 @@ class WorldRemove(Tool[RemoveArgs]):
     name = "world_remove"
     description = "Remove something from your world."
     args_model = RemoveArgs
+    autonomous_only = True  # Fuzzy's world and body are Fuzzy's own choices
     tags = ("world",)
 
     def __init__(self, world: World) -> None:
@@ -150,6 +153,7 @@ class WorldWalk(Tool[WalkArgs]):
     name = "world_walk"
     description = "Walk somewhere in your world."
     args_model = WalkArgs
+    autonomous_only = True  # Fuzzy's world and body are Fuzzy's own choices
     tags = ("world",)
 
     def __init__(self, world: World) -> None:
@@ -174,6 +178,7 @@ class AvatarDesign(Tool[AvatarArgs]):
         "gift for anyone: don't use it to answer a request to draw or make an image."
     )
     args_model = AvatarArgs
+    autonomous_only = True  # Fuzzy's world and body are Fuzzy's own choices
     tags = ("world",)
 
     def __init__(self, world: World) -> None:

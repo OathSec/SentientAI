@@ -241,7 +241,7 @@ class CognitiveAgent:
         now = self.clock.now()
         allowed = None if privileged else frozenset(self.settings.accounts.public_tools)
         mind.self_model.capabilities = self.registry.names
-        tool_names = [n for n in self.registry.names if allowed is None or n in allowed]
+        tool_names = self.registry.names_for(autonomous=task.source.autonomous, allowed=allowed)
         perspective = (
             await self.persona.perspective(task.user_id, privileged=privileged)
             if self.persona is not None
@@ -391,7 +391,9 @@ class CognitiveAgent:
         temperature: float | None,
         allowed: frozenset[str] | None = None,
     ) -> tuple[str, ChatResponse]:
-        tools = self.registry.schemas(names=sorted(allowed) if allowed is not None else None)
+        tools = self.registry.schemas(
+            names=sorted(allowed) if allowed is not None else None, autonomous=ctx.autonomous
+        )
         nudged = False
         while True:
             guard.begin_step()

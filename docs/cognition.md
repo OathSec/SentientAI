@@ -179,8 +179,9 @@ The same rules apply to the live stream: events are whitelisted per type, scoped
 `/world` is a 3D place (three.js) that Fuzzy shapes itself. Things are built from five primitive shapes
 (box, sphere, cylinder, cone, torus); every model-produced value is validated and clamped (sizes, positions,
 colours) before it is stored. Fuzzy **designs its own avatar** the same way, **walks** to places it
-chooses (with a thought bubble over its head), and **builds** things as an activity or when asked. People
-can look around and click objects; changes appear live. Limits: `world.max_objects`,
+chooses (with a thought bubble over its head), and **builds** things, always as its own choice: the tools that
+build, change, remove, walk or redesign its body are available only in Fuzzy's own autonomous work, never in a
+conversation (not even an administrator's). People can look around and click objects; changes appear live. Limits: `world.max_objects`,
 `world.max_parts_per_object`, `world.size`.
 
 ## Self-improvement (`reflection/`)

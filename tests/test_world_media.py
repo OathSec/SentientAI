@@ -27,6 +27,7 @@ from sentientai.media.images import (
     screen_prompt,
     sniff_image,
 )
+from sentientai.models.types import Message, ToolCall
 from sentientai.safety.audit import AuditLog
 from sentientai.storage.database import Database
 from sentientai.storage.records import MediaRecord, RelationshipRecord
@@ -403,3 +404,52 @@ async def test_it_is_not_offered_image_tools_it_cannot_use(runtime_factory: Any)
     assert "image_generate" not in {s.name for s in rt.c.registry.schemas()}
     rt.c.images.backend = FakeBackend()  # an image server appears
     assert "image_generate" in rt.c.registry.names
+
+
+async def test_conversations_cannot_change_the_world_or_its_body(runtime_factory: Any) -> None:  # noqa: F811
+    from sentientai.storage.records import UserRole
+
+    brain = Brain(
+        [
+            Message.assistant(
+                None,
+                [
+                    ToolCall(
+                        name="world_build", arguments={"name": "Tower", "parts": [{"shape": "box"}]}
+                    )
+                ],
+            ),
+            call("avatar_design", description="a dragon", parts=[{"shape": "cone"}]),
+            "I can't do that because someone asked.",
+            Message.assistant(
+                None,
+                [
+                    ToolCall(
+                        name="world_build", arguments={"name": "Tower", "parts": [{"shape": "box"}]}
+                    )
+                ],
+            ),
+            "Nope.",
+        ]
+    )
+    rt = await runtime_factory(brain)
+    dana = await rt.c.accounts.create_user("dana", GOOD)
+    root = await rt.c.accounts.create_user("root", GOOD, role=UserRole.ADMIN)
+    for who, say in ((dana, "Build a tower!"), (root, "Build a tower!")):
+        await rt.chat(f"user:{who.id}", say, user=who, timeout=10)
+    assert await rt.c.world.objects() == [] and rt.c.world.avatar.versions == 0
+    offered = {t.name for t in brain.agent_requests[0].tools}
+    assert "world_look" in offered and not offered & {
+        "world_build",
+        "world_modify",
+        "world_remove",
+        "world_walk",
+        "avatar_design",
+    }
+    # even an administrator's conversation doesn't offer them or run them
+    admin_offered = {t.name for t in brain.agent_requests[-1].tools}
+    assert "world_build" not in admin_offered and "fs_read" in admin_offered
+    assert any(e.type == "tool.restricted" for e in rt.c.audit.iter_entries())
+    # Fuzzy's own work can
+    assert "world_build" in rt.c.registry.names_for(autonomous=True)
+    assert "world_build" not in rt.c.registry.names_for(autonomous=False)

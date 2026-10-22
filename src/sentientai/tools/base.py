@@ -77,6 +77,8 @@ class Tool(ABC, Generic[A]):
     risk: RiskLevel = RiskLevel.NONE
     timeout_s: float = 60.0
     tags: tuple[str, ...] = ()
+    # Only Fuzzy's own initiative may use this tool, never a conversation (not even an admin's).
+    autonomous_only: bool = False
 
     def available(self) -> bool:
         """False when the tool can't work right now (e.g. no image server): it isn't offered."""
@@ -126,11 +128,15 @@ class ToolRegistry:
         return [self._tools[n] for n in self.names]
 
     def schemas(
-        self, *, names: list[str] | None = None, max_risk: RiskLevel | None = None
+        self,
+        *,
+        names: list[str] | None = None,
+        max_risk: RiskLevel | None = None,
+        autonomous: bool = True,
     ) -> list[ToolSchema]:
         selected = []
         for tool in self.tools():
-            if not tool.available():
+            if not tool.available() or (tool.autonomous_only and not autonomous):
                 continue
             if names is not None and tool.name not in names:
                 continue
@@ -138,6 +144,16 @@ class ToolRegistry:
                 continue
             selected.append(tool.schema())
         return selected
+
+    def names_for(self, *, autonomous: bool, allowed: frozenset[str] | None = None) -> list[str]:
+        """Tools usable in this kind of work, for telling Fuzzy what it can do."""
+
+        return [
+            n
+            for n in self.names
+            if (allowed is None or n in allowed)
+            and (autonomous or not self._tools[n].autonomous_only)
+        ]
 
     def describe(self) -> list[dict[str, Any]]:
         return [

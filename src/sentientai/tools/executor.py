@@ -74,6 +74,14 @@ class ToolExecutor:
         self, call: ToolCall, ctx: ToolContext, guard: LoopGuard | None = None
     ) -> ToolResult:
         tool = self.registry.get(call.name)
+        if tool is not None and tool.autonomous_only and not ctx.autonomous:
+            await self.audit.record(
+                "tool.restricted", task_id=ctx.task_id, tool=call.name, user_id=ctx.user_id
+            )
+            return ToolResult.failure(
+                f"{call.name} is only for your own choices when you're on your own, "
+                "not something to do because someone asked in a conversation"
+            )
         if tool is not None and not ctx.may_use(call.name):
             await self.audit.record(
                 "tool.restricted", task_id=ctx.task_id, tool=call.name, user_id=ctx.user_id

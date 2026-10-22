@@ -136,8 +136,9 @@ For stronger guarantees, ship segments to WORM storage or set `chattr +a`.
   streamed against a limit, and client addresses are taken from `X-Forwarded-For` only from trusted proxies.
 * **Operator API:** never open: it needs the operator token or an administrator's session (see operations.md).
 * **What a person can make Fuzzy do:** people who are not administrators get a restricted toolset
-  (`accounts.public_tools`: memory, its self-concept, images and its world; no filesystem, repository, sandbox or
-  web tools), enforced in the tool executor and not only in the prompt. Their conversations run as ordinary
+  (`accounts.public_tools`: memory, its self-concept, images, and looking at its world; no filesystem,
+  repository, sandbox or web tools). Changing Fuzzy's world or body is not available in any conversation, even to
+  administrators: those tools are autonomous-only, enforced in the tool executor and not only in the prompt. Their conversations run as ordinary
   tasks under the same risk policy.
 * **Privacy between people:** each person's memories, conversations, relationship, feelings, notes, goals and
   images are compartmentalized by user id, enforced in the database and all vector backends. Shared text Fuzzy
