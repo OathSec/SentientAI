@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Tooling
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Runtime state (never commit memories, audit logs or secrets).
+# Anchored to the repo root: src/sentientai/data/ is package data and must be tracked.
+/data/
+/workspace/
+/reports/
+/sentient.yaml
+/deploy/sentient.yaml
+.env
+*.gguf
+/deploy/models/
+/deploy/volumes/
+
+# Local service artifacts
+dump.rdb
