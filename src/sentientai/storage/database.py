@@ -556,6 +556,9 @@ class DocumentRepository(_Repository[DocumentRecord]):
         t = self.table
         return await self._select(select(t).order_by(t.c.ingested_at.desc()).limit(limit))
 
+    async def delete(self, id_: str) -> None:
+        await _delete_where(self.engine, self.table.c.id, id_)
+
 
 class ConversationRepository(_Repository[ConversationMessage]):
     table = schema.conversation_messages
@@ -581,6 +584,20 @@ class ConversationRepository(_Repository[ConversationMessage]):
 
     async def delete_user(self, user_id: str) -> int:
         return await _delete_where(self.engine, self.table.c.user_id, user_id)
+
+    async def page(
+        self, user_id: str, *, limit: int = 40, before: datetime | None = None
+    ) -> builtins.list[ConversationMessage]:
+        """One person's messages, oldest first, ending just before ``before``."""
+
+        t = self.table
+        stmt = select(t).where(t.c.user_id == user_id)
+        if before is not None:
+            stmt = stmt.where(t.c.created_at < before)
+        records = await self._select(
+            stmt.order_by(t.c.created_at.desc(), t.c.id.desc()).limit(limit)
+        )
+        return list(reversed(records))
 
     async def count_since(self, when: datetime, *, role: str | None = None) -> int:
         t = self.table

@@ -1,7 +1,10 @@
-"""HTTP API and operator dashboard.
+"""HTTP API for the operator, and the public web app.
 
-All ``/v1`` routes (and ``/metrics``) require ``Authorization: Bearer <token>``
-when ``api.auth_token`` is configured. ``/health`` is always open for probes.
+All ``/v1`` routes (and ``/metrics``) need either the operator bearer token or a signed-in
+administrator's session; without a configured token one is generated on first start, so they
+are never open by accident (``api.insecure_no_auth`` opts out, for local development).
+``/health`` is always open for probes. The people-facing app lives under ``/api`` and ``/``
+(see :mod:`sentientai.web`).
 
 Note: no ``from __future__ import annotations`` here. FastAPI must evaluate the
 locally defined ``Operator`` dependency alias at definition time; with
@@ -11,14 +14,12 @@ postponed annotations it would silently degrade to a query parameter.
 import asyncio
 import contextlib
 import json
-import secrets
 from collections.abc import AsyncIterator
-from importlib import resources
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from sentientai import __version__
@@ -34,6 +35,9 @@ from sentientai.storage.records import (
     TaskSource,
     TaskStatus,
 )
+from sentientai.web.pages import mount_pages
+from sentientai.web.routes import build_router
+from sentientai.web.security import BodyLimit, SecurityHeaders, WebAuth
 
 
 class ChatIn(BaseModel):
@@ -86,9 +90,18 @@ class ProposeIn(BaseModel):
 def create_app(runtime: Runtime) -> FastAPI:
     settings = runtime.settings
     c = runtime.c
-    token = settings.api.auth_token.get_secret_value() if settings.api.auth_token else None
+    open_api = settings.api.insecure_no_auth
+    token = None if open_api else settings.resolved_api_token(create=True)
+    web_auth = WebAuth(runtime, token)
 
-    app = FastAPI(title="SentientAI", version=__version__, docs_url="/docs", redoc_url=None)
+    docs = settings.api.docs
+    app = FastAPI(
+        title="Fuzzy",
+        version=__version__,
+        docs_url="/docs" if docs else None,
+        redoc_url=None,
+        openapi_url="/openapi.json" if docs else None,
+    )
     if settings.api.cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -96,19 +109,25 @@ def create_app(runtime: Runtime) -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    app.add_middleware(
+        BodyLimit,
+        default=256_000,
+        large={"/api/teach/file": 52_000_000, "/v1/ingest": 2_000_000},
+    )
+    app.add_middleware(
+        SecurityHeaders,
+        hsts=settings.accounts.hsts,
+        csp_exempt=("/docs", "/openapi.json") if docs else (),
+    )
 
-    def auth(request: Request) -> str:
-        if token is None:
-            return "operator"
-        header = request.headers.get("authorization", "")
-        supplied = header.removeprefix("Bearer ").strip() if header.startswith("Bearer ") else ""
-        if not supplied:
-            supplied = request.query_params.get("token", "")  # EventSource cannot set headers
-        if not supplied or not secrets.compare_digest(supplied, token):
-            raise HTTPException(status_code=401, detail="invalid or missing bearer token")
-        return "operator"
+    async def operator(request: Request) -> str:
+        return (await web_auth.admin(request)).actor
 
-    Operator = Annotated[str, Depends(auth)]
+    async def operator_stream(request: Request) -> str:
+        return (await web_auth.admin_stream(request)).actor
+
+    Operator = Annotated[str, Depends(operator)]
+    OperatorStream = Annotated[str, Depends(operator_stream)]
 
     # -------------------------------------------------------------- probes
     @app.get("/health")
@@ -350,19 +369,19 @@ def create_app(runtime: Runtime) -> FastAPI:
 
     # -------------------------------------------------------------- events
     @app.get("/v1/events")
-    async def events(_: Operator, pattern: str = "*") -> StreamingResponse:
+    async def events(_: OperatorStream, pattern: str = "*") -> StreamingResponse:
         async def stream() -> AsyncIterator[bytes]:
             yield b": connected\n\n"
             for event in c.bus.recent(pattern, limit=20):
                 yield f"data: {json.dumps(event.to_dict(), default=str)}\n\n".encode()
-            iterator = c.bus.stream(pattern).__aiter__()
-            while True:
-                try:
-                    event = await asyncio.wait_for(iterator.__anext__(), timeout=15)
-                except TimeoutError:
-                    yield b": keepalive\n\n"
-                    continue
-                yield f"data: {json.dumps(event.to_dict(), default=str)}\n\n".encode()
+            with c.bus.subscription(pattern) as queue:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=15)
+                    except TimeoutError:
+                        yield b": keepalive\n\n"
+                        continue
+                    yield f"data: {json.dumps(event.to_dict(), default=str)}\n\n".encode()
 
         return StreamingResponse(
             stream(),
@@ -370,11 +389,8 @@ def create_app(runtime: Runtime) -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # ----------------------------------------------------------- dashboard
-    @app.get("/", response_class=HTMLResponse)
-    async def dashboard() -> str:
-        return (
-            resources.files("sentientai.api").joinpath("dashboard.html").read_text(encoding="utf-8")
-        )
+    # ------------------------------------------------------------- web app
+    app.include_router(build_router(runtime, web_auth))
+    mount_pages(app)
 
     return app

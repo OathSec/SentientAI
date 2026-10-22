@@ -55,8 +55,11 @@ async def test_auth_and_probes(stack: tuple[Runtime, httpx.AsyncClient, Brain]) 
     assert ready.status_code == 200 and ready.json()["checks"]["database"] is True
     metrics = await client.get("/metrics")
     assert "sentient_affect" in metrics.text
-    dashboard = await client.get("/")
-    assert dashboard.status_code == 200 and "SentientAI Console" in dashboard.text
+    page = await client.get("/")
+    assert page.status_code == 200 and '<script src="/static/chat.js">' in page.text
+    assert "<script>" not in page.text  # the CSP forbids inline scripts, so there are none
+    assert "default-src 'none'" in page.headers["content-security-policy"]
+    assert page.headers["x-frame-options"] == "DENY"
 
 
 async def test_chat_tasks_and_state(stack: tuple[Runtime, httpx.AsyncClient, Brain]) -> None:

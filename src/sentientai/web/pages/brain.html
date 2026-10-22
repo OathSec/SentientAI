@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brain</title>
+<link rel="icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top" id="top"></header>
+<main class="wide">
+  <div class="row spread">
+    <h1 id="title">Brain</h1>
+    <span class="small muted" id="live-state"></span>
+  </div>
+  <div id="banner"></div>
+  <div class="grid">
+    <section class="card"><h2>How it feels</h2><div id="feelings"></div></section>
+    <section class="card"><h2>What it senses</h2><div id="signals"></div></section>
+    <section class="card"><h2>Who it has decided to be</h2><div id="beliefs"></div></section>
+    <section class="card"><h2>Goals</h2><div id="goals"></div></section>
+  </div>
+  <div class="grid">
+    <section class="card"><h2>What it has been doing</h2><div id="activities"></div></section>
+    <section class="card"><h2>What it has been thinking</h2><div id="thoughts"></div></section>
+  </div>
+  <div class="grid">
+    <section class="card">
+      <h2>What it remembers</h2>
+      <div id="memory-stats" class="small muted"></div>
+      <form id="search" class="row hidden mt-xs">
+        <input id="q" type="search" placeholder="Search its memory" maxlength="200" class="grow">
+        <button type="submit" class="secondary">Search</button>
+      </form>
+      <div id="memory-results"></div>
+    </section>
+    <section class="card"><h2>Live</h2><pre class="feed" id="feed"></pre></section>
+  </div>
+  <div id="admin" class="hidden">
+    <h2>Operator view</h2>
+    <div class="grid">
+      <section class="card"><h2>People it knows</h2><div id="people"></div></section>
+      <section class="card"><h2>Attention and work</h2><div id="work"></div></section>
+    </div>
+  </div>
+</main>
+<script src="/static/app.js"></script>
+<script src="/static/brain.js"></script>
+</body>
+</html>

@@ -31,7 +31,7 @@ class ApiClient:
         cls, settings: Settings, url: str | None = None, *, timeout: float = 30.0
     ) -> ApiClient:
         host = settings.api.host if settings.api.host not in {"0.0.0.0", "::"} else "127.0.0.1"  # noqa: S104
-        token = settings.api.auth_token.get_secret_value() if settings.api.auth_token else None
+        token = settings.resolved_api_token()
         return cls(url or f"http://{host}:{settings.api.port}", token=token, timeout=timeout)
 
     def request(

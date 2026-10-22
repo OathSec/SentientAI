@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import fnmatch
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -78,6 +78,25 @@ class EventBus:
                         queue.get_nowait()
                 queue.put_nowait(event)
         return event
+
+    @contextlib.contextmanager
+    def subscription(
+        self, pattern: str = "*", maxsize: int = 1000
+    ) -> Iterator[asyncio.Queue[Event]]:
+        """A queue of matching events for the duration of the ``with`` block.
+
+        Unlike :meth:`stream`, waiting on the queue with a timeout is safe: cancelling a
+        ``queue.get()`` loses nothing, whereas cancelling an async generator ends it.
+        """
+
+        queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=maxsize)
+        entry = (pattern, queue)
+        self._queues.append(entry)
+        try:
+            yield queue
+        finally:
+            with contextlib.suppress(ValueError):
+                self._queues.remove(entry)
 
     async def stream(self, pattern: str = "*", maxsize: int = 1000) -> AsyncIterator[Event]:
         queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=maxsize)

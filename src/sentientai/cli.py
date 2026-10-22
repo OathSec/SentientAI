@@ -142,8 +142,8 @@ def run(
     if port:
         s.api.port = port
     configure_logging(s.logging.level, s.logging.format)
-    if not no_api and s.api.auth_token is None and not _is_loopback(s.api.host):
-        _fail("refusing to expose the API on a non-loopback address without api.auth_token")
+    if not no_api and s.api.insecure_no_auth and not _is_loopback(s.api.host):
+        _fail("refusing api.insecure_no_auth on a non-loopback address")
     asyncio.run(_serve(s, api=not no_api))
 
 
@@ -316,7 +316,13 @@ async def _doctor(s: Settings) -> list[tuple[str, bool, str]]:
 
     async def safety() -> tuple[bool, str]:
         engaged = s.kill_switch_path.exists()
-        auth = "token set" if s.api.auth_token else "no token (loopback only)"
+        auth = (
+            "open (insecure_no_auth)"
+            if s.api.insecure_no_auth
+            else "token set"
+            if s.api.auth_token
+            else f"generated token in {s.api_token_path}"
+        )
         return not engaged, f"kill switch {'ENGAGED' if engaged else 'released'}; API {auth}"
 
     await check("data directory", data_dir())

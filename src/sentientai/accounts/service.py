@@ -395,7 +395,7 @@ class AccountService:
         self,
         user_id: str,
         *,
-        by: UserRecord,
+        by: UserRecord | str,
         status: UserStatus | None = None,
         role: UserRole | None = None,
         can_teach: bool | None = None,
@@ -403,7 +403,8 @@ class AccountService:
         user = await self.db.users.get(user_id)
         if user is None:
             raise AuthError("No such user.", 404)
-        if user.id == by.id and (status is not None or role is not None):
+        actor = by.id if isinstance(by, UserRecord) else by
+        if user.id == actor and (status is not None or role is not None):
             raise AuthError("You can't change your own role or status.", 400)
         if status is not None:
             user.status = status
@@ -417,7 +418,7 @@ class AccountService:
         await self.db.users.save(user)
         await self.audit.record(
             "account.updated",
-            actor=by.id,
+            actor=actor,
             user_id=user.id,
             status=user.status.value,
             role=user.role.value,

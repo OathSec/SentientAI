@@ -368,6 +368,16 @@ class MemorySystem:
 
         return await self.recall(query, kinds=[MemoryKind.PROCEDURE], k=k, min_similarity=0.3)
 
+    async def forget_source(self, source: str) -> int:
+        """Remove every memory that came from one source (e.g. a taught document)."""
+
+        ids = [m.id for m in await self.db.memories.by_source(source, limit=100_000)]
+        await self.vectors.delete(ids)
+        await self.db.memories.purge(ids)
+        await self.vectors.flush()
+        await self._emit("memory.source_forgotten", source=source, count=len(ids))
+        return len(ids)
+
     async def forget_user(self, user_id: str) -> int:
         """Erase every private memory about a person (account deletion)."""
 

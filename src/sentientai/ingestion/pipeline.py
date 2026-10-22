@@ -7,6 +7,7 @@ import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sentientai.core.events import EventBus
 from sentientai.core.logging import get_logger
@@ -172,8 +173,15 @@ class IngestionPipeline:
         return await self.ingest_document(doc)
 
     async def ingest_text(
-        self, text: str, *, title: str, source: str = "inline", name: str = "note.md"
+        self,
+        text: str,
+        *,
+        title: str,
+        source: str = "inline",
+        name: str = "note.md",
+        metadata: dict[str, Any] | None = None,
     ) -> IngestResult:
         doc = load_bytes(text.encode(), source=source, name=name)
         doc.title = title
+        doc.metadata.update(metadata or {})
         return await self.ingest_document(doc)

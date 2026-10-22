@@ -12,6 +12,7 @@ Configuration is resolved in priority order:
 from __future__ import annotations
 
 import os
+import secrets
 from contextvars import ContextVar
 from enum import IntEnum
 from pathlib import Path
@@ -276,7 +277,15 @@ class RuntimeConfig(BaseModel):
 class ApiConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=1, le=65535)
-    auth_token: SecretStr | None = None
+    auth_token: SecretStr | None = Field(
+        default=None,
+        description="Bearer token for the operator API (/v1). If unset, one is generated into "
+        "<data_dir>/api_token on first start and used by the local CLI.",
+    )
+    insecure_no_auth: bool = Field(
+        default=False, description="Leave the operator API open (local development only)."
+    )
+    docs: bool = Field(default=False, description="Serve the interactive API documentation.")
     cors_origins: list[str] = Field(default_factory=list)
 
 
@@ -472,6 +481,29 @@ class Settings(BaseSettings):
     @property
     def audit_path(self) -> Path:
         return self.safety.audit_dir or self.storage.data_dir / "audit"
+
+    @property
+    def api_token_path(self) -> Path:
+        return self.storage.data_dir / "api_token"
+
+    def resolved_api_token(self, *, create: bool = False) -> str | None:
+        """The operator API token: configured, else the generated file (made if ``create``)."""
+
+        if self.api.auth_token is not None:
+            return self.api.auth_token.get_secret_value()
+        path = self.api_token_path
+        try:
+            existing = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            existing = ""
+        if existing or not create:
+            return existing or None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        token = secrets.token_urlsafe(32)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token + "\n")
+        return token
 
     @property
     def media_path(self) -> Path:

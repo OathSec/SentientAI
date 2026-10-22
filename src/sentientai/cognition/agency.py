@@ -190,7 +190,9 @@ class Agency:
         )
         await self.db.activities.insert(activity)
         await self._publish_activity(activity)
-        await self.world.set_action(_WORLD_ACTION.get(choice.kind, "thinking"), choice.intent)
+        # What shows over Fuzzy's head in the world is public, so nothing about a person goes there.
+        shown = "thinking about someone" if choice.person else choice.intent
+        await self.world.set_action(_WORLD_ACTION.get(choice.kind, "thinking"), shown)
         status, outcome = ActivityStatus.DONE, ""
         try:
             outcome = await self._carry_out(choice, activity, signals)
@@ -412,7 +414,8 @@ class Agency:
             thought=thought[:400],
             user_id=choice.person.id if choice.person else None,
         )
-        await self.world.set_action("thinking", thought[:200])
+        if choice.person is None:  # the world page is public
+            await self.world.set_action("thinking", thought[:200])
         return thought + (f"\nInsight: {insight}" if insight else "")
 
     async def _do_wander(

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in</title>
+<link rel="icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top" id="top"></header>
+<main class="narrow">
+  <h1 id="heading">Sign in</h1>
+  <div id="msg"></div>
+
+  <form id="signin" class="card" autocomplete="on">
+    <label for="si-user">Username</label>
+    <input id="si-user" name="username" type="text" autocomplete="username" required maxlength="64">
+    <label for="si-pass">Password</label>
+    <input id="si-pass" name="password" type="password" autocomplete="current-password" required maxlength="256">
+    <p class="row mt-s"><button type="submit">Sign in</button></p>
+    <p class="small muted hidden" id="to-register">New here? <a href="#" id="show-register">Create an account</a></p>
+  </form>
+
+  <form id="register" class="card hidden" autocomplete="on">
+    <label for="rg-user">Username</label>
+    <input id="rg-user" type="text" autocomplete="username" required maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{2,31}">
+    <p class="small muted">3 to 32 letters, digits, dots, dashes or underscores.</p>
+    <label for="rg-name">What should Fuzzy call you?</label>
+    <input id="rg-name" type="text" maxlength="40" autocomplete="nickname">
+    <label for="rg-pass">Password</label>
+    <input id="rg-pass" type="password" autocomplete="new-password" required maxlength="256">
+    <p class="small muted" id="pass-hint">Use a long password you don't use anywhere else.</p>
+    <div id="invite-row">
+      <label for="rg-invite">Invite code</label>
+      <input id="rg-invite" type="text" maxlength="128" autocomplete="off">
+    </div>
+    <p class="row mt-s"><button type="submit">Create account</button></p>
+    <p class="small muted">Fuzzy remembers what you tell it, and builds its own view of you over time. You can export or erase everything it holds about you from your account page.</p>
+    <p class="small muted"><a href="#" id="show-signin">I already have an account</a></p>
+  </form>
+
+  <form id="second" class="card hidden">
+    <p>Enter the 6-digit code from your authenticator app.</p>
+    <label for="code">Code</label>
+    <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required>
+    <p class="row mt-s"><button type="submit">Continue</button></p>
+  </form>
+</main>
+<script src="/static/app.js"></script>
+
+<script src="/static/login.js"></script>
+</body>
+</html>
