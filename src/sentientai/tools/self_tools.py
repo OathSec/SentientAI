@@ -48,6 +48,11 @@ class SelfDefine(Tool[DefineArgs]):
             args.aspect, args.value, args.reasoning, source=_source(ctx)
         )
         b = change.belief
+        if change.status == "deferred":
+            return ToolResult.success(
+                "You've settled a lot about yourself today. Give it time: answer without "
+                "committing to this yet, and decide it later."
+            )
         if change.status == "unchanged":
             return ToolResult.success(
                 f"You already decided this on {b.formed_at:%Y-%m-%d}: {b.aspect} = {b.value} "
@@ -79,6 +84,11 @@ class SelfRevise(Tool[ReviseArgs]):
         change = await self.selfhood.consider(
             args.aspect, args.new_value, args.reasoning, source=_source(ctx)
         )
+        if change.status == "deferred":
+            return ToolResult.success(
+                "You're already weighing several possible changes. Finish thinking those over "
+                "first; this one can wait."
+            )
         if change.status == "defined":
             return ToolResult.success(
                 f"You hadn't decided this before, so it's recorded now: "

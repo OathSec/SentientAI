@@ -114,6 +114,14 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
     chat_limit = LoginThrottle(20)
     teach_limit = LoginThrottle(10)
     export_limit = LoginThrottle(3)
+    # Anything that checks the current password is limited, so a hijacked session can't be used
+    # to guess it.
+    password_limit = LoginThrottle(5)
+
+    def check_password_attempts(user: UserRecord) -> None:
+        if not password_limit.allow(user.id):
+            raise HTTPException(status_code=429, detail="Too many attempts. Please wait a minute.")
+
     chat_locks: dict[str, asyncio.Lock] = {}
     streams: dict[str, int] = {}
 
@@ -240,6 +248,7 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
 
     @router.post("/api/me/password")
     async def change_password(body: PasswordIn, p: Person) -> dict[str, bool]:
+        check_password_attempts(user_of(p))
         try:
             await c.accounts.change_password(
                 user_of(p), body.current, body.new, keep_session=p.session.id if p.session else None
@@ -265,6 +274,7 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
     async def totp_disable(body: PasswordOnlyIn, p: Person) -> dict[str, bool]:
         if cfg.require_admin_totp and p.admin:
             raise HTTPException(status_code=403, detail="administrators must keep two-factor on")
+        check_password_attempts(user_of(p))
         try:
             await c.accounts.disable_totp(user_of(p), body.password)
         except AuthError as exc:
@@ -295,6 +305,7 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
         from sentientai.accounts.passwords import verify_password
 
         user = user_of(p)
+        check_password_attempts(user)
         if not verify_password(body.password, user.password_hash):
             raise HTTPException(status_code=401, detail="Your password is incorrect.")
         counts = await erase_account(user, by=user.id)

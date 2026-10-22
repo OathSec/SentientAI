@@ -977,3 +977,41 @@ async def test_world_and_gallery_for_signed_in_people(web_factory: Any) -> None:
         and "someone" in world["objects"][0]["description"]
     )
     assert world["size"] == w.rt.settings.world.size
+
+
+async def test_password_checks_cannot_be_used_to_guess(web_factory: Any) -> None:
+    w = await web_factory()
+    _, client, csrf = await person(w, "dana")
+    codes = [
+        (
+            await post(
+                client,
+                "/api/me/password",
+                csrf,
+                json={"current": f"wrong guess {n}!!", "new": OTHER},
+            )
+        ).status_code
+        for n in range(7)
+    ]
+    assert codes == [401] * 5 + [429] * 2
+    # The same budget covers the other places that check the password.
+    assert (
+        await post(client, "/api/me/delete", csrf, json={"password": "wrong guess!!!"})
+    ).status_code == 429
+    assert (
+        await post(client, "/api/me/totp/disable", csrf, json={"password": "wrong guess!!!"})
+    ).status_code == 429
+    assert (
+        await w.client().post("/api/auth/login", json={"username": "dana", "password": GOOD})
+    ).status_code == 200
+
+
+async def test_expired_sessions_are_cleaned_up(web_factory: Any) -> None:
+    w = await web_factory(accounts={"idle_hours": 1, "session_days": 1})
+    user, client, _ = await person(w, "dana")
+    other = w.client()
+    await sign_in(other, "dana")
+    w.rt.c.clock.advance(2 * 3600)
+    assert await w.rt.c.db.sessions.purge_expired(w.rt.c.clock.now()) == 2
+    assert (await client.get("/api/me")).status_code == 401
+    assert user.id

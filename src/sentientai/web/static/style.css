@@ -113,6 +113,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 #status { min-height: 1.3rem; font-size: 0.85rem; color: var(--muted); }
 
 /* brain */
+.row > .meter { flex: 1; min-width: 4rem; }
+dl.kv dd > .meter { margin: 0.5rem 0; }
 .meter { height: 0.5rem; background: var(--soft); border: 1px solid var(--line); border-radius: 2px; }
 .meter > span { display: block; height: 100%; background: var(--bar); }
 .meter.pos > span { background: var(--accent); }
@@ -156,4 +158,6 @@ pre.feed { max-height: 18rem; overflow: auto; margin: 0; font: 0.8rem/1.4 ui-mon
 @media (max-width: 40rem) {
   main { padding: 0.75rem; }
   header.top { padding: 0.6rem 0.75rem; }
+  header.top .brand { flex: 1; }
+  header.top nav { order: 3; flex: 1 1 100%; }
 }

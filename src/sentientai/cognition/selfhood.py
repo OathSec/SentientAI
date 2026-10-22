@@ -17,6 +17,7 @@ import asyncio
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import timedelta
 
 from sentientai import prompts
 from sentientai.core.clock import Clock, SystemClock
@@ -51,7 +52,8 @@ def _clean(text: str, limit: int) -> str:
 class BeliefChange:
     """What happened to a proposed belief."""
 
-    status: str  # "defined" | "unchanged" | "considering" | "already_considering"
+    # "defined" | "unchanged" | "considering" | "already_considering" | "deferred"
+    status: str
     belief: SelfBeliefRecord
     current: SelfBeliefRecord | None = None
 
@@ -65,7 +67,11 @@ class SelfConcept:
         audit: AuditLog,
         bus: EventBus | None = None,
         clock: Clock | None = None,
+        max_per_day: int = 20,
+        max_pending: int = 10,
     ) -> None:
+        self.max_per_day = max_per_day
+        self.max_pending = max_pending
         self.repo = repo
         self.router = router
         self.audit = audit
@@ -116,6 +122,12 @@ class SelfConcept:
             current = await self.get(key)
             if current is not None:
                 return BeliefChange("unchanged", current, current)
+            since = self.clock.now() - timedelta(days=1)
+            if await self.repo.count_formed_since(since) >= self.max_per_day:
+                # Settling a lot at once is how a personality gets written by whoever asks most.
+                return BeliefChange(
+                    "deferred", SelfBeliefRecord(aspect=key, value=value, reasoning=reasoning)
+                )
             belief = SelfBeliefRecord(
                 aspect=key,
                 value=value,
@@ -145,9 +157,16 @@ class SelfConcept:
         if current.value.casefold() == value.casefold():
             return BeliefChange("unchanged", current, current)
         async with self._lock:
-            for pending in await self.pending():
+            held = await self.pending()
+            for pending in held:
                 if pending.aspect == key and pending.value.casefold() == value.casefold():
                     return BeliefChange("already_considering", pending, current)
+            if len(held) >= self.max_pending:
+                return BeliefChange(
+                    "deferred",
+                    SelfBeliefRecord(aspect=key, value=value, reasoning=reasoning),
+                    current,
+                )
             proposal = SelfBeliefRecord(
                 aspect=key,
                 value=value,

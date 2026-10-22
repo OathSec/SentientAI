@@ -114,6 +114,42 @@ For stronger guarantees, ship segments to WORM storage or set `chattr +a`.
 - Applying commits to `sentient/<proposal-id>`. Your working tree is never touched,
   and nothing is merged or pushed.
 
+## The public site: accounts, sessions and privacy
+
+* **Passwords:** scrypt (N=2^15, r=8, p=1, per-password salt), self-describing so the cost can be raised and old
+  hashes upgraded at next sign-in. Minimum length 12, a deny-list of very common choices, no truncation. Unknown
+  usernames are verified against a dummy hash so timing doesn't reveal which accounts exist.
+* **Sessions:** random 256-bit tokens in an `HttpOnly`, `SameSite=Lax` cookie (`__Host-` prefixed and `Secure`
+  by default). Only the SHA-256 of a token is stored. Sessions have an absolute lifetime and an idle timeout, are
+  new on every sign-in, and end at once when an account is disabled or its password changes.
+* **CSRF:** every state-changing request needs the session's token in `X-CSRF-Token`, and a browser `Origin`, if
+  sent, must be this site. State-changing JSON endpoints refuse non-JSON content types.
+* **Brute force:** accounts lock after repeated failures (`accounts.max_failed_logins`, `lockout_minutes`), sign-in
+  and two-factor attempts are rate-limited per address, and sign-up, chat, teaching and export have their own limits.
+  Optional TOTP second factor (RFC 6238) with replay protection; `accounts.require_admin_totp` makes it mandatory
+  for administrators.
+* **Browser hardening:** a strict Content-Security-Policy (`default-src 'none'`; scripts, styles, images and
+  connections from this origin only; no inline script or style), `frame-ancestors 'none'`, `nosniff`,
+  `Referrer-Policy`, `Permissions-Policy`, cross-origin isolation headers, optional HSTS. Everything dynamic is
+  inserted as text, never parsed as HTML.
+* **Request limits:** bodies are size-limited (including ones that lie about `Content-Length`), uploads are
+  streamed against a limit, and client addresses are taken from `X-Forwarded-For` only from trusted proxies.
+* **Operator API:** never open: it needs the operator token or an administrator's session (see operations.md).
+* **What a person can make Fuzzy do:** people who are not administrators get a restricted toolset
+  (`accounts.public_tools`: memory, its self-concept, images and its world; no filesystem, repository, sandbox or
+  web tools), enforced in the tool executor and not only in the prompt. Their conversations run as ordinary
+  tasks under the same risk policy.
+* **Privacy between people:** each person's memories, conversations, relationship, feelings, notes, goals and
+  images are compartmentalized by user id, enforced in the database and all vector backends. Shared text Fuzzy
+  writes has other people's names removed. See [cognition.md](cognition.md#privacy-compartments).
+* **Their data is theirs:** export everything, or erase the account and everything private to it.
+* **Images:** prompts are screened, output is validated as image data, and files are served only to people allowed
+  to see them.
+
+What this does *not* give you: a language model can still say things that are wrong or unwise, redaction is
+name-based (a description that identifies someone without naming them isn't caught), and anything an
+administrator or the operator can see in the database or audit log they can read. Tell your users that.
+
 ## Known limits and threat model notes
 
 - **Prompt injection.** Content from web pages, documents and files can try to steer
@@ -125,4 +161,9 @@ For stronger guarantees, ship segments to WORM storage or set `chattr +a`.
   hostile DNS server could still race it. Use `web.allowed_domains` for high
   assurance.
 - **Model honesty.** Confidence scores are estimates. Treat low-confidence answers
-  as drafts.
+  as drafts. The grounding pass reduces invented memories but a language model checking a
+  language model is not a guarantee.
+- **Public text injection.** What people say to Fuzzy and teach it is untrusted input to a model. Taught
+  knowledge is shared with everyone, so only trusted people should have the teach permission.
+- **Shared GPU.** Quotas limit how much one person can use, but a determined user can still slow
+  everyone down; size `accounts.daily_*` for your hardware.

@@ -41,7 +41,7 @@
           el("button", { class: "danger", onclick: () => act(async () => {
             if (!confirm("Erase " + u.display_name + " and everything private to them? This can't be undone.")) return;
             await api("/api/admin/users/" + u.id, { method: "DELETE" }); users();
-          }) }, "Erase")))))))));
+          }) }, "Erase"))))))));
   }
 
   async function invites() {
@@ -56,8 +56,8 @@
       el("div", { id: "iv-out" }));
     form.addEventListener("submit", (e) => { e.preventDefault(); act(async () => {
       const r = await api("/api/admin/invites", { method: "POST", body: { role: $("iv-role").value, can_teach: $("iv-teach").checked, days: Number($("iv-days").value) } });
-      clear($("iv-out")).append(el("p", { class: "notice" }, "Give them this code. It is shown once and works once: ", el("code", {}, r.code)));
-      invites();
+      await invites();  // redraw the list first: it replaces the form, and the code must survive that
+      $("iv-out").append(el("p", { class: "notice" }, "Give them this code. It is shown once and works once: ", el("code", {}, r.code)));
     }); });
     clear(panel).append(form, el("div", { class: "card" }, el("h2", {}, "Invites"),
       data.invites.length ? el("table", {}, el("thead", {}, el("tr", {}, ["Role", "Teaches", "Created", "Expires", "Used"].map((h) => el("th", {}, h)))),

@@ -860,6 +860,28 @@ class SelfBeliefRepository(_Repository[SelfBeliefRecord]):
             stmt = stmt.where(t.c.aspect == aspect)
         return await self._select(stmt.order_by(t.c.formed_at.asc()))
 
+    async def count_formed_since(self, since: datetime) -> int:
+        """Beliefs settled (formed or changed to) since ``since``; proposals don't count."""
+
+        t = self.table
+        async with self.engine.connect() as conn:
+            return int(
+                (
+                    await conn.execute(
+                        select(func.count())
+                        .select_from(t)
+                        .where(
+                            and_(
+                                t.c.formed_at >= since,
+                                t.c.status.in_(
+                                    [BeliefStatus.ACTIVE.value, BeliefStatus.REVISED.value]
+                                ),
+                            )
+                        )
+                    )
+                ).scalar_one()
+            )
+
     async def with_status(self, status: BeliefStatus) -> builtins.list[SelfBeliefRecord]:
         t = self.table
         return await self._select(

@@ -15,6 +15,9 @@ cp deploy/.env.example deploy/.env        # secrets, absolute storage paths, mod
 cp sentient.yaml deploy/sentient.yaml
 docker compose -f deploy/docker-compose.yml up -d                     # runtime + Postgres + Redis
 docker compose -f deploy/docker-compose.yml --profile models up -d    # + llama.cpp servers
+docker compose -f deploy/docker-compose.yml --profile web up -d       # + Caddy: HTTPS for the public site
+docker compose -f deploy/docker-compose.yml exec sentientai \
+  sentientai users create you --admin                                  # the first administrator
 ```
 
 ### Option B: systemd (bare metal)
@@ -27,7 +30,8 @@ running tasks on `SIGTERM`, and engages the kill switch on `SIGUSR1`.
 
 | Task | Command |
 |---|---|
-| Talk | `sentientai chat` (or the dashboard at `http://127.0.0.1:8765/`) |
+| Talk | The web app at `http://127.0.0.1:8765/`, or `sentientai chat` (as the operator, not as a person) |
+| People | `sentientai users create NAME [--admin] [--teach]`, `list`, `invite`, `passwd`, `disable`/`enable`, `set-role`, `reset-2fa`, `unlock` |
 | One-shot question | `sentientai ask "…"` |
 | Background task | `sentientai submit "…" --wait` |
 | What is it doing / feeling? | `sentientai state`, `sentientai events` |
@@ -39,9 +43,57 @@ running tasks on `SIGTERM`, and engages the kill switch on `SIGUSR1`.
 | Self-improvement | `improve propose`, `improve show <id>`, `improve stage <id>`, `improve apply <id>` |
 | Model speed baseline | `sentientai bench` |
 
-All `/v1` API routes require `Authorization: Bearer $SENTIENT_API__AUTH_TOKEN` when a
-token is configured. The daemon refuses to bind a non-loopback address without one.
-OpenAPI docs are served at `/docs`.
+All `/v1` API routes (and `/metrics`, `/ready`) need `Authorization: Bearer <token>` or a signed-in
+administrator's session. The token is `api.auth_token`; if you don't set one, a random token is
+generated into `<data_dir>/api_token` (mode 0600) the first time the daemon starts, and the CLI on the
+same machine reads it from there. The operator API is never open by accident (`api.insecure_no_auth`
+exists for local development and is refused on a non-loopback address). The interactive OpenAPI docs are
+off unless you set `api.docs: true`.
+
+## Running the public site
+
+The web app is the same server (`sentientai run`). To put it on the internet:
+
+1. **HTTPS.** Serve it behind a TLS-terminating reverse proxy. The compose `web` profile runs Caddy with
+   automatic certificates (set `SITE_ADDRESS` in `deploy/.env`; see `deploy/Caddyfile`). Keep
+   `accounts.cookie_secure: true` (the default) so the session cookie is `Secure` and `__Host-` prefixed,
+   and turn on `accounts.hsts` once HTTPS works.
+2. **Tell it about the proxy.** Set `accounts.trusted_proxies` to the proxy's network (compose does this for
+   its own Docker networks) so per-address rate limits use the real client address from `X-Forwarded-For`.
+   Without it, the proxy's address is used for everyone.
+3. **Choose who can register.** `accounts.registration`: `invite` (default; make codes with
+   `sentientai users invite` or on the Admin page), `open`, or `closed`. Consider `accounts.require_admin_totp: true`.
+4. **Create the first administrator** with `sentientai users create NAME --admin`.
+5. **Decide what visitors may see.** By default every page needs an account. `accounts.public_pages: true`
+   lets anonymous visitors view the Brain, World and Gallery pages with people's names removed.
+6. **Set quotas** (`accounts.daily_messages`, `daily_images`, `daily_teach_bytes`): a home GPU is shared by everyone.
+7. **Optionally restrict the operator surface** to your own network (see the commented block in `deploy/Caddyfile`).
+8. Check `sentientai doctor`, then sign in with a second account and confirm you can't see the first one's
+   private things (their conversations, notes and feelings).
+
+### People
+
+Self-service (the **You** page): see what Fuzzy thinks of you, read its notes, change your password, set up
+two-factor sign-in, **download everything it holds about you**, or **delete your account**, which erases your
+conversations, private memories, relationship, notes, feelings, images and sessions. Administrators can
+disable or erase accounts, change roles, let people teach, and create invites on the Admin page; every
+account action is in the audit log. Passwords are never stored (scrypt hashes), sessions are stored as hashes,
+and a database leak doesn't hand out live sessions.
+
+### Teaching Fuzzy
+
+People with the *teach* permission (and administrators) can give Fuzzy text, a web page (fetched with the SSRF
+guard) or a file (PDF, text, Markdown, HTML, CSV, code...) on the **Teach** page. It goes into Fuzzy's **shared**
+knowledge, so it can come up in anyone's conversation: only grant it to people you trust. Fuzzy is told when
+something new arrives and reads it when it chooses to; administrators can make it forget a document. The CLI
+equivalent for operator-supplied material is `sentientai ingest`.
+
+### Images
+
+Set `images.backend` and `images.base_url` (see [hardware.md](hardware.md#images) for the 1660 Ti caveats).
+Fuzzy makes pictures for people on request (private to them, counted against their daily quota) and for itself
+(public gallery). Prompts are screened (sexual content is refused outright), outputs are checked to be real
+PNG/JPEG/WebP data, and files are served only to people allowed to see them, with `nosniff` and no active content.
 
 ## Monitoring
 
@@ -68,8 +120,8 @@ older than your SLA.
 
 | What | How |
 |---|---|
-| Postgres (memories, tasks, goals, approvals, proposals, history) | `pg_dump -Fc sentientai > sentient.dump` |
-| Data dir (vector index if embedded, audit log, archive) | snapshot `storage.data_dir` and `archive_dir` |
+| Postgres (memories, accounts, relationships, self-beliefs, feelings, activities, world, tasks, goals, approvals, proposals, history) | `pg_dump -Fc sentientai > sentient.dump` |
+| Data dir (vector index if embedded, audit log, archive, **generated images in `media/`**, the API token) | snapshot `storage.data_dir` and `archive_dir` |
 | Redis (working memory) | AOF on by default in compose; losing it only loses recent turns |
 | Config & secrets | `sentient.yaml`, `deploy/.env` |
 
@@ -93,6 +145,10 @@ Vectors can always be rebuilt from Postgres: stop the daemon, then run
 | Model tier down | Router falls back to the other tier. Check `doctor`, the llama.cpp logs, and `sentient_llm_requests_total{outcome="error"}`. |
 | Frequent loop breaks | `sentientai improve propose` or the `self_analyze` tool show which limits trip. Tune `limits.*` or the prompts. |
 | Memory recall poor | Check embedding prefixes and dimensions, then `memory reindex`. Raise `recall_k`. |
+| Someone locked out | `sentientai users unlock NAME`; lost authenticator: `users reset-2fa NAME`; forgot password: `users passwd NAME`. |
+| Suspected account abuse | `sentientai users disable NAME` ends their sessions at once. Review `audit tail --prefix account.`. Set `accounts.registration: closed`. |
+| Fuzzy said something about a person to someone else | Treat as a privacy incident: `sentientai kill`, preserve `audit` and the `memories` table, look at `agent.grounding` and `tool.requested` entries for that task. Memory compartments are enforced in SQL and in the vector indexes, so check the task's `user_id`. |
+| Image generation out of VRAM | Lower `images.width/height/steps`, use a smaller model, or pick another option in [hardware.md](hardware.md#images). |
 | Disk filling | Lower `memory.decay_half_life_days`. Archive old audit segments to cold storage (keep them for verification). |
 
 ## Evaluation

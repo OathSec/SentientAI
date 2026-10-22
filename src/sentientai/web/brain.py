@@ -135,6 +135,7 @@ class BrainView:
                     "reasoning": redact(b.reasoning),
                     "confidence": round(b.confidence, 2),
                     "since": b.formed_at.isoformat(),
+                    "source": b.source if viewer.admin else None,
                 }
                 for b in beliefs
             ],

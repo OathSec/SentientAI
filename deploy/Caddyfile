@@ -1,0 +1,18 @@
+# HTTPS for the site (used by the `web` compose profile).
+# SITE_ADDRESS is a domain name that points at this machine, e.g. fuzzy.example.org.
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# Fuzzy's live views (brain, world) stream server-sent events: don't buffer them.
+	reverse_proxy sentientai:8765 {
+		flush_interval -1
+	}
+
+	# Optional: only allow the operator API and admin endpoints from your own network.
+	# The admin page uses them with a signed-in administrator's session, so if you restrict
+	# them you can only use the admin page from those addresses.
+	#
+	# @operator path /v1/* /metrics /ready /api/admin/*
+	# @outside not remote_ip 192.168.0.0/16 10.0.0.0/8
+	# respond @operator @outside 404
+}

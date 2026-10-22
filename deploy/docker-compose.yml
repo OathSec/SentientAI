@@ -4,9 +4,11 @@
 #   docker compose -f deploy/docker-compose.yml up -d                     # runtime + storage
 #   docker compose -f deploy/docker-compose.yml --profile models up -d    # + local model servers
 #   docker compose -f deploy/docker-compose.yml --profile qdrant --profile search up -d
+#   docker compose -f deploy/docker-compose.yml --profile web up -d      # + Caddy: HTTPS in front of the site
 #
-# Model servers use llama.cpp: Vulkan for the Radeon Pro V340s (gfx900 is not
-# supported by current ROCm/vLLM) and CUDA for the GTX 1660 Ti. See docs/hardware.md.
+# Model servers use llama.cpp's CUDA build, one tier per card: the heavy model on the
+# RTX 2070 and the fast model on the GTX 1660 Ti; embeddings run on the CPU.
+# Find each card's index with `nvidia-smi -L` and set HEAVY_GPU / FAST_GPU. See docs/hardware.md.
 
 name: sentientai
 
@@ -79,6 +81,14 @@ services:
       SENTIENT_STORAGE__VECTOR_BACKEND: pgvector
       SENTIENT_STORAGE__ARCHIVE_DIR: /archive
       SENTIENT_API__AUTH_TOKEN: ${SENTIENT_API_TOKEN:?set SENTIENT_API_TOKEN in deploy/.env}
+      # The public site. Cookies are Secure-only by default: serve it over HTTPS (the `web`
+      # profile does), or set SENTIENT_COOKIE_SECURE=false for plain-http testing.
+      SENTIENT_ACCOUNTS__COOKIE_SECURE: ${SENTIENT_COOKIE_SECURE:-true}
+      SENTIENT_ACCOUNTS__HSTS: ${SENTIENT_COOKIE_SECURE:-true}
+      SENTIENT_ACCOUNTS__REGISTRATION: ${SENTIENT_REGISTRATION:-invite}
+      SENTIENT_ACCOUNTS__TRUSTED_PROXIES: '["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]'
+      SENTIENT_IMAGES__BACKEND: ${SENTIENT_IMAGE_BACKEND:-disabled}
+      SENTIENT_IMAGES__BASE_URL: ${SENTIENT_IMAGE_URL:-http://host.docker.internal:7860}
       SENTIENT_SAFETY__AUDIT_HMAC_KEY: ${SENTIENT_AUDIT_KEY:?set SENTIENT_AUDIT_KEY in deploy/.env}
       SENTIENT_MODELS__HEAVY__BASE_URL: http://llm-heavy:8000/v1
       SENTIENT_MODELS__FAST__BASE_URL: http://llm-fast:8002/v1
@@ -93,51 +103,73 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - ${DOCKER_GID:-999}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach an image server running on the host
     ports:
       - "127.0.0.1:8765:8765"
+
+  # HTTPS in front of the site (automatic certificates). Set SITE_ADDRESS (a domain name
+  # pointing at this machine) in deploy/.env. Ports 80 and 443 must be reachable.
+  caddy:
+    <<: *restart
+    profiles: [web]
+    image: caddy:2
+    depends_on: [sentientai]
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in deploy/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${SSD_PATH:-/srv/sentientai}/caddy/data:/data
+      - ${SSD_PATH:-/srv/sentientai}/caddy/config:/config
 
   # ------------------------------------------------------------ model servers
   llm-heavy:
     <<: *restart
     profiles: [models]
-    image: ghcr.io/ggml-org/llama.cpp:server-vulkan
-    devices:
-      - /dev/dri:/dev/dri
-    group_add: ["${VIDEO_GID:-44}", "${RENDER_GID:-110}"]
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    environment:
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["${HEAVY_GPU:-0}"], capabilities: [gpu]}]   # the RTX 2070
     volumes:
       - ${MODELS_PATH:-./models}:/models:ro
     command: >
       -m /models/${HEAVY_MODEL:-heavy.gguf}
       --host 0.0.0.0 --port 8000
-      --n-gpu-layers 999 --split-mode layer --tensor-split 1,1,1,1
-      --ctx-size 16384 --jinja --parallel 1
+      --n-gpu-layers 999 --ctx-size 8192 --flash-attn on
+      --cache-type-k q8_0 --cache-type-v q8_0 --jinja --parallel 1
 
   llm-fast:
     <<: *restart
     profiles: [models]
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    environment:
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
     deploy:
       resources:
         reservations:
-          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+          devices: [{driver: nvidia, device_ids: ["${FAST_GPU:-1}"], capabilities: [gpu]}]   # the GTX 1660 Ti
     volumes:
       - ${MODELS_PATH:-./models}:/models:ro
     command: >
       -m /models/${FAST_MODEL:-fast.gguf}
       --host 0.0.0.0 --port 8002
-      --n-gpu-layers 999 --ctx-size 8192 --jinja --parallel 2
+      --n-gpu-layers 999 --ctx-size 8192 --flash-attn on
+      --cache-type-k q8_0 --cache-type-v q8_0 --jinja --parallel 2
 
+  # Embeddings on the CPU: tiny, and it keeps the GPUs' VRAM for the language models.
   llm-embed:
     <<: *restart
     profiles: [models]
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda
-    deploy:
-      resources:
-        reservations:
-          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    image: ghcr.io/ggml-org/llama.cpp:server
     volumes:
       - ${MODELS_PATH:-./models}:/models:ro
     command: >
       -m /models/${EMBED_MODEL:-embed.gguf}
       --host 0.0.0.0 --port 8001
-      --embedding --n-gpu-layers 999 --ctx-size 8192 --batch-size 8192 --ubatch-size 8192
+      --embedding --n-gpu-layers 0 --ctx-size 8192 --batch-size 2048 --ubatch-size 2048

@@ -664,6 +664,7 @@ class Runtime:
     async def _consolidate(self) -> None:
         c = self.c
         self._last_consolidation = c.clock.monotonic()
+        await c.db.sessions.purge_expired(c.clock.now())
         report = await c.consolidator.run()
         await c.audit.record(
             "memory.consolidated",

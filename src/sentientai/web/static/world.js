@@ -16,8 +16,8 @@
   scene.background = new THREE.Color(dark ? 0x1d2420 : 0xe6eee8);
   const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
 
-  scene.add(new THREE.HemisphereLight(0xffffff, dark ? 0x333a35 : 0x9aa89d, 0.85));
-  const sun = new THREE.DirectionalLight(0xffffff, 0.7);
+  scene.add(new THREE.HemisphereLight(0xffffff, dark ? 0x333a35 : 0x9aa89d, 0.5));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.5);
   const half = world.size / 2;
   sun.position.set(half * 0.6, half * 1.2, half * 0.4);
   sun.castShadow = true;

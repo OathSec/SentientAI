@@ -194,7 +194,15 @@ async def build_components(
     )
 
     # Fuzzy's self, feelings, relationships, world and creations.
-    selfhood = SelfConcept(db.self_beliefs, router=router, audit=audit, bus=bus, clock=clock)
+    selfhood = SelfConcept(
+        db.self_beliefs,
+        router=router,
+        audit=audit,
+        bus=bus,
+        clock=clock,
+        max_per_day=settings.mind.max_beliefs_per_day,
+        max_pending=settings.mind.max_pending_changes,
+    )
     emotions = Emotions(db.emotions, mind.affect, state=db.state, bus=bus, clock=clock)
     await emotions.load()
     relationships = Relationships(

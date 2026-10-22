@@ -6,7 +6,8 @@ narrow interface with an embedded fallback, so the same code runs on a laptop, i
 CI and on the GPU server.
 
 ```
-                         operator ── CLI / HTTP API / dashboard / SSE
+     people ── web app (chat, brain, world, gallery, teach, admin) ┐
+     operator ── CLI / operator API / SSE                           │
                                           │
 ┌─────────────────────────────── runtime/ ┴────────────────────────────────────┐
 │ Runtime: boot/restore → perceive → attend (global workspace) → act → reflect │
@@ -18,7 +19,8 @@ CI and on the GPU server.
  ContextBuilder          + affect/drives        facts, procedures, narrative)
  ContextCompressor       + global workspace     PerformanceAnalyzer
  Planner                 + goals, metacognition SelfImprovementEngine
-       │                 + inner life
+ Grounding               + self-concept, feelings
+       │                 + relationships, agency
        ├───────────────┬──────────────────┬──────────────────────┐
    models/          memory/            tools/                safety/
    ModelRouter      MemorySystem       ToolExecutor ◀── PolicyEngine, ApprovalGate,
@@ -39,7 +41,10 @@ CI and on the GPU server.
 | Model | `models/` | `ModelRouter`, `OpenAICompatibleClient`, `ScriptedLLM`, `HashingEmbedder`, `OpenAIEmbedder` |
 | Memory | `memory/`, `storage/` | `MemorySystem`, `MemoryConsolidator`, `RedisWorkingMemory`, `PgVectorStore`, `QdrantVectorStore`, `Database` |
 | Tools | `tools/`, `ingestion/` | `ToolExecutor`, `Workspace`, `DockerSandbox`, `WebClient`, `IngestionPipeline` |
-| Reflection & learning | `reflection/`, `cognition/` | `Reflector`, `PerformanceAnalyzer`, `SelfImprovementEngine`, `Mind`, `InnerLife` |
+| Reflection & learning | `reflection/`, `cognition/` | `Reflector`, `PerformanceAnalyzer`, `SelfImprovementEngine`, `Mind` |
+| A mind of its own | `cognition/` | `SelfConcept`, `Emotions`, `Interoception`, `Relationships`, `Agency`, `Grounding`, `Persona`, `Redactor` |
+| People | `accounts/`, `web/` | `AccountService`, `Quotas`, `UserDataService`, `WebAuth`, `BrainView`, `build_router` |
+| World & media | `world/`, `media/` | `World`, `ImageService` (A1111 and OpenAI-compatible backends) |
 | Safety & governance | `safety/` | `PolicyEngine`, `ApprovalGate`, `KillSwitch`, `LoopGuard`, `AuditLog` |
 
 ## The runtime loop
@@ -52,8 +57,10 @@ Each tick (`runtime.tick_interval_s`):
    mode only), and due maintenance.
 3. **Attend.** Run the salience competition. Winners become the current contents of
    awareness, are broadcast on the event bus, and are rendered into prompts.
-4. **Act** on the top actionable percept: run a task, pursue a goal, think, or
-   consolidate memory. Concurrency is bounded by `runtime.max_concurrent_tasks`.
+4. **Act** on the top actionable percept: run a task, pursue an operator goal, live a beat
+   of its own life (`Agency`: sense, feel, choose, act, rest), or consolidate memory.
+   Concurrency is bounded by `runtime.max_concurrent_tasks`. Short follow-up thinking (forming
+   an opinion of someone after a chat) runs as a non-blocking afterthought.
 5. After every task, **reflect** and update affect, the self-model, procedures and
    goals.
 

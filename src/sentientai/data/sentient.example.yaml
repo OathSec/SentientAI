@@ -5,41 +5,41 @@
 # Environment variables override this file. Run `sentientai -c sentient.yaml doctor`
 # after editing to check every subsystem.
 
+# Only the name and the plain facts of Fuzzy's situation are configured. Its personality,
+# tastes, opinions of people and sense of self are not: it decides those itself, records them
+# with its reasoning, and stays consistent with them (see docs/cognition.md).
 identity:
   name: Fuzzy
-  purpose: >-
-    A persistent, local cognitive system that learns continuously, helps its operator,
-    and improves itself under human supervision.
-  # values: [...]          # override the default value list if you like
+  # origin: You live on a home server, and people talk with you through a website. ...
+  # commitments: []        # rules from you that Fuzzy is told about as your requests
 
 # -----------------------------------------------------------------------------
 # Models. Any OpenAI-compatible server works: llama.cpp `llama-server`, vLLM,
 # Ollama (base_url http://host:11434/v1), LM Studio, TGI.
 #
-# Reference hardware (see docs/hardware.md):
-#   heavy  -> 2x Radeon Pro V340 = 4 Vega 10 GPUs x 16 GB (gfx900). Current ROCm and vLLM
-#             do not support gfx900, so serve with llama.cpp (Vulkan backend, or HIP built
-#             with AMDGPU_TARGETS=gfx900), splitting layers across all four GPUs.
-#   fast   -> GTX 1660 Ti (6 GB, CUDA): an 8B model at Q4_K_M, or 3-4B with embeddings alongside.
+# Reference hardware (see docs/hardware.md): one llama.cpp CUDA build, one tier per card.
+#   heavy  -> RTX 2070 (8 GB): an 8B model at Q5_K_M with 8k context (about 7 GB in total).
+#   fast   -> GTX 1660 Ti (6 GB): a 4B model at Q4_K_M (about 3.4 GB), leaving ~2.5 GB.
+#   embeddings run on the CPU. Image generation: see `images` below and docs/hardware.md.
 models:
   heavy:
     base_url: http://127.0.0.1:8000/v1
     model: heavy            # llama-server serves whatever GGUF it loaded; the name is informational
-    context_window: 16384
+    context_window: 8192
     max_output_tokens: 2048
     temperature: 0.3
     timeout_s: 600
     supports_tools: true    # set false if the server/chat template lacks native tool calling
-    device: "vulkan:0-3 (2x Radeon Pro V340)"
+    device: "cuda (RTX 2070)"
   fast:
     base_url: http://127.0.0.1:8002/v1
     model: fast
-    context_window: 8192
+    context_window: 4096    # per slot: llama-server divides --ctx-size 8192 between 2 slots
     max_output_tokens: 1024
     temperature: 0.2
     timeout_s: 180
     supports_tools: true
-    device: "cuda:0 (GTX 1660 Ti)"
+    device: "cuda (GTX 1660 Ti)"
   embedding:
     provider: openai        # "hashing" = offline lexical fallback (no server needed)
     base_url: http://127.0.0.1:8001/v1
@@ -106,8 +106,8 @@ safety:
   # kill_switch_file: /run/sentientai/KILL  # touch this file (or press a wired button) to stop
 
 runtime:
-  autonomy: reactive        # reactive: act on requests only | proactive: also pursue goals & think when idle
-  idle_think_interval_s: 900
+  autonomy: proactive       # proactive: Fuzzy lives its own life when nobody needs it | reactive: only acts on requests
+  idle_think_interval_s: 900   # how often operator-set goals are picked up
   max_concurrent_tasks: 1   # one GPU-heavy task at a time
   schedules:
     - name: morning-review
@@ -124,7 +124,64 @@ runtime:
 api:
   host: 127.0.0.1
   port: 8765
-  # auth_token: change-me     # required before binding to a non-loopback address
+  # Operator API (/v1, /metrics): needs this bearer token or a signed-in administrator's session.
+  # If unset, a random token is generated into <data_dir>/api_token on first start (mode 0600)
+  # and the local CLI reads it from there. It is never open by accident.
+  # auth_token: change-me
+  # insecure_no_auth: false    # local development only
+  # docs: false                # serve /docs and /openapi.json
+
+# -----------------------------------------------------------------------------
+# People. The web app (chat, brain, world, gallery, teaching, admin) needs accounts.
+# Create the first administrator with: sentientai users create NAME --admin
+accounts:
+  registration: invite        # invite | open | closed
+  cookie_secure: true         # set false only for plain-http local testing
+  session_days: 14            # absolute session lifetime
+  idle_hours: 72              # sessions end after this much inactivity
+  min_password_length: 12
+  max_failed_logins: 5        # then the account locks for lockout_minutes
+  lockout_minutes: 15
+  login_attempts_per_ip_per_minute: 10
+  require_admin_totp: false   # make administrators use an authenticator app
+  daily_messages: 200         # per person per day (0 = unlimited); admins are never limited
+  daily_images: 10
+  daily_teach_bytes: 20000000
+  public_pages: false         # let visitors who aren't signed in see the brain, world and gallery (names redacted)
+  hsts: false                 # send Strict-Transport-Security (turn on once you serve HTTPS)
+  # trusted_proxies: ["172.16.0.0/12"]   # reverse proxies whose X-Forwarded-For is believed
+  # public_tools: [...]       # tools Fuzzy may use in conversations with non-admins (default: memory, self, images, world)
+
+# -----------------------------------------------------------------------------
+# Fuzzy's inner life.
+mind:
+  grounding: true             # check each reply against memory before sending; rewrite invented claims
+  appraise_relationships: true
+  max_beliefs_per_day: 20     # most things it will settle about itself in a day (stops anyone authoring its personality by flooding it)
+  max_pending_changes: 10     # most possible changes of mind it holds at once
+  beat_min_s: 120             # shortest pause between things it chooses to do on its own (minimum 5)
+  beat_max_s: 3600            # longest rest it may choose
+  prior_contact_gap_hours: 6  # starting guess for how often people visit; experience replaces it
+  notes_per_person_per_day: 1 # notes it may leave for someone it misses (0 = never)
+  # activities: [think, wander, journal, study, research, create_art, build, write_note,
+  #              reconsider, pursue_goal, new_goal, rest]   # what it may choose from
+
+# Image generation: a separate server (see docs/hardware.md for the 1660 Ti caveats).
+images:
+  backend: disabled           # disabled | automatic1111 (Stable Diffusion WebUI/Forge with --api) | openai
+  base_url: http://127.0.0.1:7860
+  # api_key: ...
+  # model: ...
+  width: 512
+  height: 512
+  steps: 25
+  timeout_s: 240
+
+# Fuzzy's 3D world (shaped by Fuzzy itself; viewed on the World page).
+world:
+  size: 40                    # metres across
+  max_objects: 150
+  max_parts_per_object: 40
 
 self_improvement:
   enabled: false

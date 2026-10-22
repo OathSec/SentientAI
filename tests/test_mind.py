@@ -676,3 +676,45 @@ async def test_research_hands_a_task_to_the_agent(runtime_factory: Any) -> None:
     [task] = await c.db.tasks.list()
     assert task.source is TaskSource.INTRINSIC and "how tides work" in task.goal
     await asyncio.sleep(0)
+
+
+async def test_nobody_can_write_its_personality_by_flooding_it(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    rt = await runtime_factory(
+        Brain(), start=False, mind={"max_beliefs_per_day": 3, "max_pending_changes": 2}
+    )
+    clock = rt.c.clock
+    s = rt.c.selfhood
+    for aspect in ("favorite color", "favorite food", "favorite animal"):
+        assert (await s.define(aspect, "x", "", source="conversation:u1")).status == "defined"
+    refused = await s.define("favorite season", "winter", "", source="conversation:u2")
+    assert refused.status == "deferred"
+    assert await s.get("favorite season") is None  # not recorded, so not in its prompts
+    assert len(await s.beliefs()) == 3
+    clock.advance(25 * 3600)  # a day later it can settle more
+    assert (await s.define("favorite season", "winter", "", source="self")).status == "defined"
+
+    assert (
+        await s.consider("favorite color", "red", "", source="conversation:u2")
+    ).status == "considering"
+    assert (
+        await s.consider("favorite food", "pizza", "", source="conversation:u2")
+    ).status == "considering"
+    third = await s.consider("favorite animal", "cat", "", source="conversation:u2")
+    assert third.status == "deferred" and len(await s.pending()) == 2
+
+
+async def test_the_tools_say_so_when_it_is_overwhelmed(runtime_factory: Any) -> None:  # noqa: F811
+    from sentientai.tools.base import ToolContext
+
+    rt = await runtime_factory(Brain(), start=False, mind={"max_beliefs_per_day": 1})
+    tool = rt.c.registry.get("self_define")
+    ctx = ToolContext(user_id="usr_a")
+    first = await tool.run(tool.args_model(aspect="gender", value="female", reasoning="x"), ctx)
+    second = await tool.run(tool.args_model(aspect="colour", value="green", reasoning="x"), ctx)
+    assert "Recorded" in first.output and "Give it time" in second.output
+    belief = await rt.c.selfhood.get("gender")
+    assert (
+        belief is not None and belief.source == "conversation:usr_a"
+    )  # admins can see where it came from

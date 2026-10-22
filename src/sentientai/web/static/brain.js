@@ -7,7 +7,10 @@
   if (state.signed_in) $("search").classList.remove("hidden");
   let timer = null;
 
-  function section(id, ...children) { const node = clear($(id)); node.append(...children); }
+  function section(id, ...children) {
+    const node = clear($(id));
+    node.append(...children.filter((c) => c !== null && c !== undefined && c !== false));
+  }
   function empty(text) { return el("p", { class: "muted" }, text); }
   function kv(pairs) {
     const dl = el("dl", { class: "kv" });
@@ -53,7 +56,7 @@
         ? el("ul", { class: "plain" }, b.beliefs.map((x) => el("li", {},
             el("strong", {}, x.aspect + ": "), x.value,
             x.reasoning ? el("div", { class: "small muted" }, "because " + x.reasoning) : null,
-            el("div", { class: "small muted" }, "since " + clock(x.since)))))
+            el("div", { class: "small muted" }, "since " + clock(x.since) + (x.source ? " \u00b7 decided in: " + x.source : "")))))
         : empty(name + " hasn’t decided anything about itself yet."),
       Array.isArray(b.considering) && b.considering.length
         ? el("p", { class: "small" }, "Thinking over: " + b.considering.map((c) => c.aspect + " → " + c.value).join("; "))

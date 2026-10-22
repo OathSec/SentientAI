@@ -607,7 +607,10 @@ class Agency:
             importance=0.35,
             person=None,
         )
-        await world.set_thought(note or summary)  # it may still be walking over to its work
+        if (
+            choice.person is None
+        ):  # in its own words, and not about anyone: the world page is public
+            await world.set_thought(note or choice.intent)  # it may still be walking to its work
         return summary + (f". {note}" if note else "")
 
     async def _do_write_note(

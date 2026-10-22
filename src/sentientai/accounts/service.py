@@ -391,6 +391,56 @@ class AccountService:
         await self.audit.record("account.totp_disabled", actor=user.id)
 
     # -------------------------------------------------------------- admin
+    async def _get(self, username_or_id: str) -> UserRecord:
+        user = await self.db.users.by_username(username_or_id) or await self.db.users.get(
+            username_or_id
+        )
+        if user is None:
+            raise AuthError("No such user.", 404)
+        return user
+
+    async def find(self, username_or_id: str) -> UserRecord:
+        return await self._get(username_or_id)
+
+    async def set_password(self, username_or_id: str, new: str, *, by: str) -> UserRecord:
+        """Operator-side password reset: signs the person out everywhere."""
+
+        user = await self._get(username_or_id)
+        problems = password_problems(
+            new, username=user.username, min_length=self.config.min_password_length
+        )
+        if problems:
+            raise AuthError("Password: " + "; ".join(problems) + ".")
+        user.password_hash = hash_password(new)
+        user.failed_logins = 0
+        user.locked_until = None
+        user.updated_at = self.clock.now()
+        await self.db.users.save(user)
+        revoked = await self.db.sessions.delete_for_user(user.id)
+        await self.audit.record(
+            "account.password_reset", actor=by, user_id=user.id, sessions_revoked=revoked
+        )
+        return user
+
+    async def reset_totp(self, username_or_id: str, *, by: str) -> UserRecord:
+        user = await self._get(username_or_id)
+        user.totp_secret = None
+        user.totp_last_step = 0
+        user.updated_at = self.clock.now()
+        await self.db.users.save(user)
+        await self.db.sessions.delete_for_user(user.id)
+        await self.audit.record("account.totp_reset", actor=by, user_id=user.id)
+        return user
+
+    async def unlock(self, username_or_id: str, *, by: str) -> UserRecord:
+        user = await self._get(username_or_id)
+        user.failed_logins = 0
+        user.locked_until = None
+        user.updated_at = self.clock.now()
+        await self.db.users.save(user)
+        await self.audit.record("account.unlocked", actor=by, user_id=user.id)
+        return user
+
     async def update_user(
         self,
         user_id: str,

@@ -1,16 +1,25 @@
-# llama.cpp model server, one instance per tier:
-#   /etc/sentientai/llama-heavy.env   (Vulkan build, 4 Vega GPUs of 2x Radeon Pro V340)
-#   /etc/sentientai/llama-fast.env    (CUDA build, GTX 1660 Ti)
-#   /etc/sentientai/llama-embed.env   (CUDA build, GTX 1660 Ti, embeddings)
+# llama.cpp model server (CUDA build), one instance per tier (see docs/hardware.md):
+#   /etc/sentientai/llama-heavy.env   (RTX 2070)
+#   /etc/sentientai/llama-fast.env    (GTX 1660 Ti)
+#   /etc/sentientai/llama-embed.env   (CPU)
 #   sudo systemctl enable --now llama-server@heavy llama-server@fast llama-server@embed
 #
+# Find each card's index with `nvidia-smi -L` and pin it with CUDA_VISIBLE_DEVICES.
+#
 # Example /etc/sentientai/llama-heavy.env:
-#   LLAMA_BIN=/opt/llama.cpp-vulkan/bin/llama-server
-#   LLAMA_ARGS=-m /models/Llama-3.3-70B-Instruct-Q4_K_M.gguf --host 127.0.0.1 --port 8000 --n-gpu-layers 999 --split-mode layer --tensor-split 1,1,1,1 --ctx-size 16384 --jinja
-# Example /etc/sentientai/llama-fast.env:
-#   LLAMA_BIN=/opt/llama.cpp-cuda/bin/llama-server
-#   LLAMA_ARGS=-m /models/Qwen3-8B-Q4_K_M.gguf --host 127.0.0.1 --port 8002 --n-gpu-layers 999 --ctx-size 8192 --jinja
+#   LLAMA_BIN=/opt/llama.cpp/build/bin/llama-server
+#   LLAMA_ARGS=-m /models/Qwen3-8B-Q5_K_M.gguf --host 127.0.0.1 --port 8000 --n-gpu-layers 999 --ctx-size 8192 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --jinja --parallel 1
+#   CUDA_DEVICE_ORDER=PCI_BUS_ID
 #   CUDA_VISIBLE_DEVICES=0
+# Example /etc/sentientai/llama-fast.env:
+#   LLAMA_BIN=/opt/llama.cpp/build/bin/llama-server
+#   LLAMA_ARGS=-m /models/Qwen3-4B-Q4_K_M.gguf --host 127.0.0.1 --port 8002 --n-gpu-layers 999 --ctx-size 8192 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --jinja --parallel 2
+#   CUDA_DEVICE_ORDER=PCI_BUS_ID
+#   CUDA_VISIBLE_DEVICES=1
+# Example /etc/sentientai/llama-embed.env (CPU only):
+#   LLAMA_BIN=/opt/llama.cpp/build/bin/llama-server
+#   LLAMA_ARGS=-m /models/nomic-embed-text-v1.5.Q8_0.gguf --host 127.0.0.1 --port 8001 --embedding --n-gpu-layers 0
+#   CUDA_VISIBLE_DEVICES=
 [Unit]
 Description=llama.cpp server (%i)
 After=network.target

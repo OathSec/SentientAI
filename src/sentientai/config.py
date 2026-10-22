@@ -96,20 +96,20 @@ class ModelsConfig(BaseModel):
     fast: ModelEndpointConfig = Field(
         default_factory=lambda: ModelEndpointConfig(
             base_url="http://127.0.0.1:8002/v1",
-            model="fast-8b",
-            context_window=8192,
+            model="fast",
+            context_window=4096,  # per slot: two slots share an 8192-token server context
             max_output_tokens=1024,
             temperature=0.2,
-            device="cuda:0 (GTX 1660 Ti)",
+            device="cuda (GTX 1660 Ti)",
         )
     )
     heavy: ModelEndpointConfig = Field(
         default_factory=lambda: ModelEndpointConfig(
             base_url="http://127.0.0.1:8000/v1",
-            model="heavy-32b",
-            context_window=16384,
+            model="heavy",
+            context_window=8192,
             max_output_tokens=2048,
-            device="rocm (2x Radeon Pro V340)",
+            device="cuda (RTX 2070)",
         )
     )
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
@@ -313,6 +313,15 @@ class MindConfig(BaseModel):
         default=True, description="Check each reply against memory before sending it."
     )
     appraise_relationships: bool = True
+    max_beliefs_per_day: int = Field(
+        default=20,
+        ge=1,
+        description="Most things Fuzzy will settle about itself in a day, so no one can author its "
+        "personality by flooding it with questions.",
+    )
+    max_pending_changes: int = Field(
+        default=10, ge=1, description="Most possible changes of mind it will hold at once."
+    )
     beat_min_s: float = Field(
         default=120.0, ge=5, description="Shortest pause between self-chosen activities."
     )

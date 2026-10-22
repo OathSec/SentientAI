@@ -40,7 +40,12 @@ improve_app = typer.Typer(
     help="Self-improvement proposals (human-supervised).", no_args_is_help=True
 )
 eval_app = typer.Typer(help="Evaluation suite.", no_args_is_help=True)
+users_app = typer.Typer(
+    help="People who can sign in to the web app (works with or without the daemon).",
+    no_args_is_help=True,
+)
 for sub, name in [
+    (users_app, "users"),
     (approvals_app, "approvals"),
     (memory_app, "memory"),
     (goals_app, "goals"),
@@ -99,6 +104,208 @@ def _call(fn: Any, *args: Any, **kwargs: Any) -> Any:
 
 def _print_json(data: Any) -> None:
     typer.echo(json.dumps(data, indent=2, default=str, ensure_ascii=False))
+
+
+# ------------------------------------------------------------------- users
+def _accounts() -> tuple[Any, Any]:
+    """The account service on the configured database (no daemon needed)."""
+
+    from sentientai.accounts.service import AccountService
+    from sentientai.safety.audit import AuditLog
+    from sentientai.storage.database import Database
+
+    s = settings()
+    s.ensure_directories()
+    key = s.safety.audit_hmac_key
+    audit = AuditLog(
+        s.audit_path,
+        hmac_key=key.get_secret_value().encode() if key else None,
+        fsync=s.safety.audit_fsync,
+        segment_max_bytes=s.safety.audit_segment_max_bytes,
+    )
+    db = Database(s.storage.resolved_database_url())
+    return db, AccountService(db, s.accounts, audit=audit, reserved=[s.identity.name])
+
+
+def _run_accounts(work: Any) -> Any:
+    """Run ``work(service, db)`` and always close the database."""
+
+    from sentientai.accounts.service import AuthError
+
+    async def go() -> Any:
+        db, service = _accounts()
+        try:
+            await db.create_all()
+            return await work(service, db)
+        except AuthError as exc:
+            _fail(exc.message)
+        finally:
+            await db.close()
+
+    return asyncio.run(go())
+
+
+def _ask_password(label: str = "Password") -> str:
+    return str(typer.prompt(label, hide_input=True, confirmation_prompt=True))
+
+
+@users_app.command("create")
+def users_create(
+    username: str,
+    name: str | None = typer.Option(None, "--name", help="Display name (what Fuzzy calls them)."),
+    admin: bool = typer.Option(False, "--admin", help="Make them an administrator."),
+    teach: bool = typer.Option(False, "--teach", help="Let them teach Fuzzy."),
+    password_stdin: bool = typer.Option(
+        False, "--password-stdin", help="Read the password from standard input."
+    ),
+) -> None:
+    """Create an account (the way to make the first administrator)."""
+    from sentientai.storage.records import UserRole
+
+    password = (
+        typer.get_text_stream("stdin").readline().rstrip("\n")
+        if password_stdin
+        else _ask_password()
+    )
+
+    async def work(service: Any, _db: Any) -> Any:
+        return await service.create_user(
+            username,
+            password,
+            display_name=name,
+            role=UserRole.ADMIN if admin else UserRole.USER,
+            can_teach=teach,
+            by="cli",
+        )
+
+    user = _run_accounts(work)
+    typer.secho(f"created {user.role.value} {user.username} ({user.id})", fg="green")
+
+
+@users_app.command("list")
+def users_list() -> None:
+    """Show everyone with an account."""
+
+    async def work(_service: Any, db: Any) -> Any:
+        return await db.users.list()
+
+    rows = _run_accounts(work)
+    if not rows:
+        typer.echo("no accounts yet; create one with: sentientai users create NAME --admin")
+        return
+    for u in rows:
+        flags = [u.role.value, u.status.value]
+        if u.can_teach:
+            flags.append("teaches")
+        if u.totp_secret:
+            flags.append("2fa")
+        if u.locked_until:
+            flags.append("locked")
+        last = u.last_login_at.strftime("%Y-%m-%d %H:%M") if u.last_login_at else "never"
+        typer.echo(f"{u.username:<24} {', '.join(flags):<32} last sign-in {last}")
+
+
+@users_app.command("invite")
+def users_invite(
+    admin: bool = typer.Option(False, "--admin"),
+    teach: bool = typer.Option(False, "--teach"),
+    days: float = typer.Option(7.0, "--days"),
+) -> None:
+    """Make a single-use invite code for registration."""
+    from sentientai.storage.records import UserRole
+
+    async def work(service: Any, _db: Any) -> str:
+        return str(
+            await service.create_invite(
+                by="cli",
+                role=UserRole.ADMIN if admin else UserRole.USER,
+                can_teach=teach,
+                days=days,
+            )
+        )
+
+    typer.echo(_run_accounts(work))
+    typer.secho("(shown once; only its hash is stored)", err=True, fg="yellow")
+
+
+@users_app.command("passwd")
+def users_passwd(
+    username: str,
+    password_stdin: bool = typer.Option(False, "--password-stdin"),
+) -> None:
+    """Set a new password (signs them out everywhere, clears any lockout)."""
+    password = (
+        typer.get_text_stream("stdin").readline().rstrip("\n")
+        if password_stdin
+        else _ask_password("New password")
+    )
+
+    async def work(service: Any, _db: Any) -> Any:
+        return await service.set_password(username, password, by="cli")
+
+    _run_accounts(work)
+    typer.secho(f"password changed for {username}", fg="green")
+
+
+def _set_status(username: str, status: str) -> None:
+    from sentientai.storage.records import UserStatus
+
+    async def work(service: Any, _db: Any) -> Any:
+        user = await service.find(username)
+        return await service.update_user(user.id, by="cli", status=UserStatus(status))
+
+    _run_accounts(work)
+    typer.secho(f"{username} is now {status}", fg="green")
+
+
+@users_app.command("disable")
+def users_disable(username: str) -> None:
+    """Block an account and end its sessions (keeps its data)."""
+    _set_status(username, "disabled")
+
+
+@users_app.command("enable")
+def users_enable(username: str) -> None:
+    """Re-enable a disabled account."""
+    _set_status(username, "active")
+
+
+@users_app.command("set-role")
+def users_set_role(username: str, role: str = typer.Argument(..., help="admin or user")) -> None:
+    """Make someone an administrator, or a regular user."""
+    from sentientai.storage.records import UserRole
+
+    if role not in {"admin", "user"}:
+        _fail("role must be 'admin' or 'user'")
+
+    async def work(service: Any, _db: Any) -> Any:
+        user = await service.find(username)
+        return await service.update_user(user.id, by="cli", role=UserRole(role))
+
+    _run_accounts(work)
+    typer.secho(f"{username} is now {role}", fg="green")
+
+
+@users_app.command("reset-2fa")
+def users_reset_2fa(username: str) -> None:
+    """Turn off someone's two-factor sign-in (lost device)."""
+
+    async def work(service: Any, _db: Any) -> Any:
+        return await service.reset_totp(username, by="cli")
+
+    _run_accounts(work)
+    typer.secho(f"two-factor sign-in cleared for {username}", fg="green")
+
+
+@users_app.command("unlock")
+def users_unlock(username: str) -> None:
+    """Clear a lockout after too many failed sign-ins."""
+
+    async def work(service: Any, _db: Any) -> Any:
+        return await service.unlock(username, by="cli")
+
+    _run_accounts(work)
+    typer.secho(f"{username} unlocked", fg="green")
 
 
 # ------------------------------------------------------------------- setup

@@ -123,7 +123,9 @@ class BodySignals:
             "missing": [
                 {"name": a.name, "hours": round(a.hours, 1), "overdue": round(a.overdue, 2)}
                 for a in self.absences[:5]
-                if a.affinity > 0 and (admin or a.user_id == viewer)
+                if a.affinity > 0
+                and (admin or a.user_id == viewer)
+                and (a.overdue >= 1.0 or (a.usual_hours is None and a.hours >= 24))
             ],
         }
 
