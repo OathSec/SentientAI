@@ -169,7 +169,10 @@ class AvatarArgs(ToolArgs):
 
 class AvatarDesign(Tool[AvatarArgs]):
     name = "avatar_design"
-    description = "Design (or redesign) how you look in your world. Your body is your choice."
+    description = (
+        "Change how YOU look in your 3D world (your own body). This is not a picture and not a "
+        "gift for anyone: don't use it to answer a request to draw or make an image."
+    )
     args_model = AvatarArgs
     tags = ("world",)
 
@@ -181,7 +184,10 @@ class AvatarDesign(Tool[AvatarArgs]):
             avatar = await self.world.design_avatar(args.description, args.parts, by=_who(ctx))
         except WorldError as exc:
             return ToolResult.failure(str(exc))
-        return ToolResult.success(f"You now look like this (version {avatar.versions}).")
+        return ToolResult.success(
+            f"Done: your own body in your world now looks like that (version {avatar.versions}). "
+            "No picture was made."
+        )
 
 
 class ImageArgs(ToolArgs):
