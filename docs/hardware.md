@@ -62,7 +62,10 @@ model about twice the size.
 huggingface-cli download bartowski/mlabonne_Qwen3-14B-abliterated-GGUF \
   --include "*Q4_K_M*" --local-dir /mnt/nvme/models
 # deploy/.env:  BIG_MODEL=<that file's name>   HEAVY_URL=http://llm-big:8000/v1   FAST_URL=http://llm-big:8000/v1
-#               BIG_CTX_SIZE=32768  HEAVY_CTX=16384  FAST_CTX=16384
+#               BIG_CTX_SIZE=24576  HEAVY_CTX=12288  FAST_CTX=12288  BIG_SPLIT=6,8
+# BIG_SPLIT is the share per card in `nvidia-smi -L` order (the 6 GB card gets the smaller share).
+# If a card runs out of memory while loading (cudaMalloc failed), lower BIG_CTX_SIZE (and the two
+# *_CTX values to half of it) or move more to the other card, e.g. 5,9.
 docker compose -f deploy/docker-compose.yml --profile models down      # stop the two small servers
 docker compose -f deploy/docker-compose.yml --profile bigmodel up -d --build
 ```

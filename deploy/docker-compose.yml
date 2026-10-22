@@ -178,7 +178,7 @@ services:
   # One bigger model across BOTH cards (profile `bigmodel`, instead of `models`' two servers):
   # for example a 14B at Q4_K_M (~9 GB), layer-split over the 2070 and the 1660 Ti. Both of
   # Fuzzy's tiers then use it (set HEAVY_URL and FAST_URL to http://llm-big:8000/v1, and
-  # HEAVY_CTX / FAST_CTX to half of BIG_CTX_SIZE because two slots share it). Run it together
+  # HEAVY_CTX / FAST_CTX to half of BIG_CTX_SIZE (BIG_SPLIT follows `nvidia-smi -L` order) because two slots share it). Run it together
   # with `llm-embed`, but not with llm-heavy / llm-fast. See docs/hardware.md.
   llm-big:
     <<: *restart
@@ -195,8 +195,8 @@ services:
     command: >
       -m /models/${BIG_MODEL:-big.gguf}
       --host 0.0.0.0 --port 8000
-      --n-gpu-layers 999 --split-mode layer --tensor-split ${BIG_SPLIT:-8,6}
-      --ctx-size ${BIG_CTX_SIZE:-32768} --flash-attn on
+      --n-gpu-layers 999 --split-mode layer --tensor-split ${BIG_SPLIT:-6,8}
+      --ctx-size ${BIG_CTX_SIZE:-24576} --flash-attn on
       --cache-type-k q8_0 --cache-type-v q8_0 --jinja --parallel 2
 
   # Embeddings on the CPU: tiny, and it keeps the GPUs' VRAM for the language models.
