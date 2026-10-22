@@ -397,6 +397,9 @@ class TaskRepository(_Repository[TaskRecord]):
                 )
         return running
 
+    async def delete_user(self, user_id: str) -> int:
+        return await _delete_where(self.engine, self.table.c.user_id, user_id)
+
     async def count_by_status(self) -> dict[str, int]:
         t = self.table
         async with self.engine.connect() as conn:
@@ -525,6 +528,17 @@ class ConversationRepository(_Repository[ConversationMessage]):
             .limit(limit)
         )
         return list(reversed(records))
+
+    async def for_user(
+        self, user_id: str, limit: int = 10_000
+    ) -> builtins.list[ConversationMessage]:
+        t = self.table
+        return await self._select(
+            select(t).where(t.c.user_id == user_id).order_by(t.c.created_at.asc()).limit(limit)
+        )
+
+    async def delete_user(self, user_id: str) -> int:
+        return await _delete_where(self.engine, self.table.c.user_id, user_id)
 
     async def since(self, when: datetime, limit: int = 500) -> builtins.list[ConversationMessage]:
         t = self.table

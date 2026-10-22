@@ -297,6 +297,26 @@ class IdentityConfig(BaseModel):
     )
 
 
+class AccountsConfig(BaseModel):
+    """People who talk to Fuzzy through the public web app."""
+
+    registration: Literal["open", "invite", "closed"] = "invite"
+    session_days: float = Field(default=14.0, gt=0, description="Absolute session lifetime.")
+    idle_hours: float = Field(default=72.0, gt=0, description="Sessions expire after inactivity.")
+    cookie_secure: bool = Field(default=True, description="Send cookies over HTTPS only.")
+    min_password_length: int = Field(default=12, ge=8)
+    max_failed_logins: int = Field(default=5, ge=1)
+    lockout_minutes: float = Field(default=15.0, gt=0)
+    login_attempts_per_ip_per_minute: float = Field(default=10.0, gt=0)
+    require_admin_totp: bool = False
+    daily_messages: int = Field(default=200, ge=0, description="Per-user chat quota (0 = none).")
+    daily_images: int = Field(default=10, ge=0)
+    daily_teach_bytes: int = Field(default=20_000_000, ge=0)
+    public_pages: bool = Field(
+        default=False, description="Let visitors who are not signed in view the brain and world."
+    )
+
+
 class SelfImprovementConfig(BaseModel):
     enabled: bool = False
     source_root: Path = Path(".")
@@ -343,6 +363,7 @@ class Settings(BaseSettings):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     self_improvement: SelfImprovementConfig = Field(default_factory=SelfImprovementConfig)
+    accounts: AccountsConfig = Field(default_factory=AccountsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     @classmethod
