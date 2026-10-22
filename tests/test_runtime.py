@@ -18,8 +18,8 @@ from sentientai.models.types import ModelTier
 from sentientai.runtime.runtime import Runtime
 from sentientai.storage.records import (
     ApprovalStatus,
-    GoalOrigin,
     MemoryKind,
+    Scope,
     TaskRecord,
     TaskSource,
     TaskStatus,
@@ -40,7 +40,7 @@ def make_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "web": {"search_backend": "disabled"},
         "models": {"embedding": {"dimensions": 256}},
         "limits": {"llm_requests_per_minute": 1e6, "tool_calls_per_minute": 1e6, "max_steps": 8},
-        "runtime": {"tick_interval_s": 0.02, "checkpoint_interval_s": 1},
+        "runtime": {"tick_interval_s": 0.02, "checkpoint_interval_s": 1, "autonomy": "reactive"},
     }
     for key, value in overrides.items():
         base[key] = {**base.get(key, {}), **value}
@@ -125,7 +125,7 @@ async def test_chat_end_to_end(runtime_factory: Any) -> None:
     assert stats["fs_read"].calls == 1 and stats["fs_search"].calls == 1
     # identity, inner state and awareness framed the conversation
     system = brain.agent_requests[0].messages[0].text
-    assert "You are Fuzzy." in system and "## Inner state" in system and "awakening" in system
+    assert "You are Fuzzy." in system and "## How you feel" in system and "awakening" in system
     # reflection produced an episode, a fact and a procedure
     # Reflection runs after the answer is delivered; wait for the task handle to fully finish.
     await wait_for(lambda: not rt._running)
@@ -287,50 +287,60 @@ async def test_restart_continuity_and_recovery(runtime_factory: Any, tmp_path: P
     assert rt2.c.audit.verify().ok
 
 
-async def test_proactive_inner_life(runtime_factory: Any) -> None:
+async def test_proactive_life_beat(runtime_factory: Any) -> None:
+    """With nobody around, Fuzzy notices how it feels, picks an activity itself and does it."""
+
     clock = FakeClock()
     brain = Brain(
-        default_answer="I reviewed my recent episodes and noted one lesson.",
+        beat={
+            "feelings": [
+                {
+                    "emotion": "restless",
+                    "intensity": 0.6,
+                    "valence": -0.2,
+                    "lingers_hours": 3,
+                    "cause": "nothing has happened in a while",
+                }
+            ],
+            "mood": "a bit restless",
+            "choice": "think",
+            "intent": "what I'd like to understand better",
+            "why": "I feel restless and want to use the time",
+            "rest_minutes": 20,
+        },
         thought={
-            "thought": "I have been idle; my notes may be incomplete.",
+            "thought": "I would like to understand how my memory decides what to keep.",
             "insight": "Idle time is best spent organizing what I already know.",
-            "proposed_goal": {
-                "description": "Review my recent episodes for lessons",
-                "priority": 0.5,
-            },
         },
     )
     rt = await runtime_factory(
-        brain, clock=clock, runtime={"autonomy": "proactive", "idle_think_interval_s": 60}
+        brain,
+        clock=clock,
+        runtime={"autonomy": "proactive"},
+        mind={"beat_min_s": 10, "beat_max_s": 3600},
     )
-    clock.advance(4 * 3600)  # long idle period: curiosity rises, think interval elapses
-    rt._wake.set()
-    await wait_for(lambda: rt.c.goals.active(), timeout=10)
-    [goal] = await rt.c.goals.active()
-    assert goal.origin is GoalOrigin.INTRINSIC
-    clock.advance(120)  # goal pursuit becomes due
+    clock.advance(3600)
     rt._wake.set()
 
-    async def intrinsic_done() -> bool:
-        tasks = await rt.c.db.tasks.list([TaskStatus.SUCCEEDED])
-        return any(t.source is TaskSource.INTRINSIC for t in tasks)
+    async def thought_done() -> bool:
+        return any(
+            a.kind == "think" and a.status.value == "done"
+            for a in await rt.c.db.activities.recent(10)
+        )
 
-    await wait_for(intrinsic_done, timeout=10)
-    entries = {e.type: e for e in rt.c.audit.iter_entries()}
-    assert entries["mind.thought"].payload["insight"].startswith("Idle time")
+    await wait_for(thought_done, timeout=10)
+    [activity] = await rt.c.db.activities.recent(10)
+    assert activity.reason.startswith("I feel restless")
+    feelings = await rt.c.emotions.current(Scope.system())
+    assert [f.emotion for f in feelings] == ["restless"]
+    assert rt.c.emotions.mood == "a bit restless"
     reflections = await rt.c.memory.recall(
         "organizing what I already know", kinds=[MemoryKind.REFLECTION]
     )
     assert reflections
-    intrinsic = next(t for t in await rt.c.db.tasks.list() if t.source is TaskSource.INTRINSIC)
-    assert intrinsic.goal_id == goal.id
-
-    # The goal is updated after reflection, slightly after the task itself finishes.
-    async def goal_attempted() -> bool:
-        current = await rt.c.db.goals.get(goal.id)
-        return current is not None and current.attempts >= 1
-
-    await wait_for(goal_attempted, timeout=10)
+    assert any(e.type == "mind.activity" for e in rt.c.audit.iter_entries())
+    # It chose how long to rest, so the next beat isn't due yet.
+    assert rt._next_beat - clock.monotonic() > 600
 
 
 async def test_state_snapshot(runtime_factory: Any) -> None:

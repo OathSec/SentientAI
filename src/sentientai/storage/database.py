@@ -33,6 +33,8 @@ from sentientai.core.clock import ensure_utc, utcnow
 from sentientai.errors import StorageError
 from sentientai.storage import schema
 from sentientai.storage.records import (
+    ActivityRecord,
+    ActivityStatus,
     ApprovalRecord,
     ApprovalStatus,
     BeliefStatus,
@@ -160,6 +162,38 @@ class MemoryRepository(_Repository[MemoryRecord]):
             stmt = stmt.where(t.c.created_at >= since)
         order = t.c.created_at.desc() if newest_first else t.c.created_at.asc()
         return await self._select(stmt.order_by(order, t.c.id).limit(limit).offset(offset))
+
+    async def by_source(self, source: str, limit: int = 500) -> builtins.list[MemoryRecord]:
+        t = self.table
+        return await self._select(
+            select(t)
+            .where(and_(t.c.source == source, t.c.status == MemoryStatus.ACTIVE.value))
+            .order_by(t.c.created_at.asc(), t.c.id)
+            .limit(limit)
+        )
+
+    async def sample(
+        self, n: int, *, kinds: Iterable[MemoryKind] | None = None, scope: Scope = Scope()
+    ) -> builtins.list[MemoryRecord]:
+        """Random active memories (a mind wandering)."""
+
+        t = self.table
+        stmt = select(t).where(
+            and_(t.c.status == MemoryStatus.ACTIVE.value, _scope_clause(t.c.user_id, scope))
+        )
+        if kinds is not None:
+            stmt = stmt.where(t.c.kind.in_([k.value for k in kinds]))
+        return await self._select(stmt.order_by(func.random()).limit(n))
+
+    async def count_since(
+        self, since: datetime, *, kinds: Iterable[MemoryKind] | None = None
+    ) -> int:
+        t = self.table
+        stmt = select(func.count()).select_from(t).where(t.c.created_at >= since)
+        if kinds is not None:
+            stmt = stmt.where(t.c.kind.in_([k.value for k in kinds]))
+        async with self.engine.connect() as conn:
+            return int((await conn.execute(stmt)).scalar_one())
 
     async def find_by_subject(
         self, subject_key: str, kind: MemoryKind | None = None, *, user_id: str | None = None
@@ -441,12 +475,20 @@ class GoalRepository(_Repository[GoalRecord]):
     table = schema.goals
     model = GoalRecord
 
-    async def list(self, statuses: Iterable[GoalStatus] | None = None) -> builtins.list[GoalRecord]:
+    async def list(
+        self, statuses: Iterable[GoalStatus] | None = None, *, scope: Scope | None = None
+    ) -> builtins.list[GoalRecord]:
         t = self.table
         stmt = select(t)
         if statuses is not None:
             stmt = stmt.where(t.c.status.in_([s.value for s in statuses]))
+        clause = _scope_clause(t.c.user_id, scope or Scope.system())
+        if clause is not None:
+            stmt = stmt.where(clause)
         return await self._select(stmt.order_by(t.c.priority.desc(), t.c.created_at.asc()))
+
+    async def delete_user(self, user_id: str) -> None:
+        await _delete_where(self.engine, self.table.c.user_id, user_id)
 
 
 class ToolInvocationRepository(_Repository[ToolInvocationRecord]):
@@ -539,6 +581,32 @@ class ConversationRepository(_Repository[ConversationMessage]):
 
     async def delete_user(self, user_id: str) -> int:
         return await _delete_where(self.engine, self.table.c.user_id, user_id)
+
+    async def count_since(self, when: datetime, *, role: str | None = None) -> int:
+        t = self.table
+        stmt = select(func.count()).select_from(t).where(t.c.created_at >= when)
+        if role is not None:
+            stmt = stmt.where(t.c.role == role)
+        async with self.engine.connect() as conn:
+            return int((await conn.execute(stmt)).scalar_one())
+
+    async def search(
+        self, user_id: str | None, query: str, limit: int = 20
+    ) -> builtins.list[ConversationMessage]:
+        """Keyword search over one person's conversations (None: the operator's)."""
+
+        terms = re.findall(r"[\w\-']{3,}", query.lower())[:8]
+        if not terms:
+            return []
+        t = self.table
+        owner = t.c.user_id.is_(None) if user_id is None else t.c.user_id == user_id
+        content = func.lower(t.c.content)
+        return await self._select(
+            select(t)
+            .where(and_(owner, or_(*[content.contains(x) for x in terms])))
+            .order_by(t.c.created_at.desc())
+            .limit(limit)
+        )
 
     async def since(self, when: datetime, limit: int = 500) -> builtins.list[ConversationMessage]:
         t = self.table
@@ -775,6 +843,16 @@ class SelfBeliefRepository(_Repository[SelfBeliefRecord]):
             stmt = stmt.where(t.c.aspect == aspect)
         return await self._select(stmt.order_by(t.c.formed_at.asc()))
 
+    async def with_status(self, status: BeliefStatus) -> builtins.list[SelfBeliefRecord]:
+        t = self.table
+        return await self._select(
+            select(t).where(t.c.status == status.value).order_by(t.c.formed_at.asc())
+        )
+
+    async def recent_changes(self, limit: int = 30) -> builtins.list[SelfBeliefRecord]:
+        t = self.table
+        return await self._select(select(t).order_by(t.c.formed_at.desc()).limit(limit))
+
     async def history(self, aspect: str) -> builtins.list[SelfBeliefRecord]:
         t = self.table
         return await self._select(
@@ -797,19 +875,89 @@ class SelfBeliefRepository(_Repository[SelfBeliefRecord]):
             await conn.execute(t.insert().values(**new.model_dump(mode="python")))
         return new
 
+    async def activate(
+        self, proposal: SelfBeliefRecord, old_id: str | None, reasoning: str, when: datetime
+    ) -> None:
+        """Adopt a considered change: the old belief is retired, the proposal takes its place."""
+
+        t = self.table
+        proposal.status = BeliefStatus.ACTIVE
+        proposal.reasoning = reasoning
+        proposal.formed_at = when
+        async with self.engine.begin() as conn:
+            if old_id is not None:
+                await conn.execute(
+                    update(t)
+                    .where(and_(t.c.id == old_id, t.c.status == BeliefStatus.ACTIVE.value))
+                    .values(status=BeliefStatus.REVISED.value, revised_at=when)
+                )
+            await conn.execute(
+                update(t)
+                .where(t.c.id == proposal.id)
+                .values(
+                    status=proposal.status.value,
+                    reasoning=reasoning,
+                    formed_at=when,
+                    confidence=proposal.confidence,
+                )
+            )
+
 
 class EmotionRepository(_Repository[EmotionEvent]):
     table = schema.emotion_events
     model = EmotionEvent
 
     async def recent(
-        self, limit: int = 50, since: datetime | None = None
+        self, limit: int = 50, since: datetime | None = None, *, scope: Scope | None = None
     ) -> builtins.list[EmotionEvent]:
         t = self.table
         stmt = select(t)
         if since is not None:
             stmt = stmt.where(t.c.created_at >= since)
+        clause = _scope_clause(t.c.user_id, scope or Scope.system())
+        if clause is not None:
+            stmt = stmt.where(clause)
         return await self._select(stmt.order_by(t.c.created_at.desc()).limit(limit))
+
+    async def delete_user(self, user_id: str) -> None:
+        await _delete_where(self.engine, self.table.c.user_id, user_id)
+
+
+class ActivityRepository(_Repository[ActivityRecord]):
+    table = schema.activities
+    model = ActivityRecord
+
+    async def recent(
+        self, limit: int = 50, *, scope: Scope | None = None, kind: str | None = None
+    ) -> builtins.list[ActivityRecord]:
+        t = self.table
+        stmt = select(t)
+        clause = _scope_clause(t.c.user_id, scope or Scope.system())
+        if clause is not None:
+            stmt = stmt.where(clause)
+        if kind is not None:
+            stmt = stmt.where(t.c.kind == kind)
+        return await self._select(stmt.order_by(t.c.started_at.desc()).limit(limit))
+
+    async def finish(self, id_: str, status: ActivityStatus, outcome: str, when: datetime) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(self.table)
+                .where(self.table.c.id == id_)
+                .values(status=status.value, outcome=outcome, finished_at=when)
+            )
+
+    async def fail_running(self, when: datetime) -> int:
+        """Activities interrupted by a restart never finished."""
+
+        t = self.table
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(t)
+                .where(t.c.status == ActivityStatus.RUNNING.value)
+                .values(status=ActivityStatus.FAILED.value, outcome="interrupted", finished_at=when)
+            )
+        return int(result.rowcount)
 
     async def delete_user(self, user_id: str) -> None:
         await _delete_where(self.engine, self.table.c.user_id, user_id)
@@ -827,6 +975,19 @@ class NoteRepository(_Repository[NoteRecord]):
         if unread_only:
             stmt = stmt.where(t.c.read_at.is_(None))
         return await self._select(stmt.order_by(t.c.created_at.desc()).limit(200))
+
+    async def count_since(self, user_id: str, since: datetime) -> int:
+        t = self.table
+        async with self.engine.connect() as conn:
+            return int(
+                (
+                    await conn.execute(
+                        select(func.count())
+                        .select_from(t)
+                        .where(and_(t.c.user_id == user_id, t.c.created_at >= since))
+                    )
+                ).scalar_one()
+            )
 
     async def mark_read(self, user_id: str, when: datetime) -> None:
         t = self.table
@@ -920,6 +1081,7 @@ class Database:
         self.relationships = RelationshipRepository(self.engine)
         self.self_beliefs = SelfBeliefRepository(self.engine)
         self.emotions = EmotionRepository(self.engine)
+        self.activities = ActivityRepository(self.engine)
         self.notes = NoteRepository(self.engine)
         self.media = MediaRepository(self.engine)
         self.world = WorldRepository(self.engine)

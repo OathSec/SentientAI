@@ -5,7 +5,7 @@ from __future__ import annotations
 from sentientai.core.clock import Clock, SystemClock
 from sentientai.core.events import EventBus
 from sentientai.storage.database import GoalRepository
-from sentientai.storage.records import GoalOrigin, GoalRecord, GoalStatus
+from sentientai.storage.records import GoalOrigin, GoalRecord, GoalStatus, Scope
 
 ACTIVE = (GoalStatus.ACTIVE,)
 
@@ -28,8 +28,10 @@ class GoalManager:
         self.max_intrinsic = max_intrinsic
         self.clock = clock or SystemClock()
 
-    async def active(self) -> list[GoalRecord]:
-        return await self.repo.list(ACTIVE)
+    async def active(self, scope: Scope | None = None) -> list[GoalRecord]:
+        """Active goals; ``scope`` limits them to shared goals plus one person's."""
+
+        return await self.repo.list(ACTIVE, scope=scope)
 
     async def intrinsic_slots(self) -> int:
         active = [g for g in await self.active() if g.origin is GoalOrigin.INTRINSIC]
@@ -42,6 +44,7 @@ class GoalManager:
         origin: GoalOrigin = GoalOrigin.OPERATOR,
         priority: float = 0.5,
         parent_id: str | None = None,
+        user_id: str | None = None,
     ) -> GoalRecord | None:
         """Add a goal. Returns an existing duplicate, or None if intrinsic slots are full."""
 
@@ -61,11 +64,16 @@ class GoalManager:
             parent_id=parent_id,
             created_at=now,
             updated_at=now,
+            user_id=user_id,
         )
         await self.repo.insert(goal)
         if self.bus:
             await self.bus.publish(
-                "goal.added", goal_id=goal.id, origin=origin.value, description=description
+                "goal.added",
+                goal_id=goal.id,
+                origin=origin.value,
+                description=description,
+                user_id=user_id,
             )
         return goal
 

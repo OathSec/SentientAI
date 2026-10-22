@@ -34,14 +34,15 @@ from sentientai.storage.records import ScoredMemory
 log = get_logger(__name__)
 
 OPERATING_RULES = """\
-## How you operate
-- Work step by step. Gather evidence with tools instead of guessing; cite the file paths,
-  URLs or memory ids you relied on.
-- Some actions need operator approval. If an action is denied, adapt or explain what you need.
-- Store durable facts with memory_remember. Your experiences are recorded automatically.
-- Be honest about uncertainty and about what you are. Never claim to have done something you
-  did not do.
-- When finished, reply with a clear, concise final answer (no tool call).
+## How you work
+- Only talk about past events, earlier conversations, or things about a person that appear
+  in your memories or this conversation. If you don't remember something, say so plainly; you
+  can look with memory_recall or conversation_search. Never invent a memory.
+- Gather evidence with tools instead of guessing, and never claim to have done something you
+  didn't do.
+- Some actions need approval from the people who run you. If one is denied, adapt or explain.
+- Store things worth keeping with memory_remember. Your experiences are recorded automatically.
+- When you're done, reply directly (no tool call).
 Current time: {now} UTC."""
 
 
@@ -58,6 +59,8 @@ class FramingInputs:
     plan: str | None
     history: list[Turn]
     now: datetime
+    beliefs: str = ""
+    person: str | None = None
 
 
 class ContextBuilder:
@@ -93,10 +96,17 @@ class ContextBuilder:
             if not t.metadata.get("summary") and t.role in {"user", "assistant"}
         ]
 
-        sections = [
-            inputs.identity,
+        sections = [inputs.identity]
+        if inputs.beliefs:
+            sections.append(
+                f"## Who you are (your own decisions)\n{prompts.SELF_BELIEFS_GUIDE}\n"
+                f"{inputs.beliefs}"
+            )
+        if inputs.person:
+            sections.append(f"## The person you're talking with\n{inputs.person}")
+        sections += [
             f"## Continuity\n{inputs.continuity}",
-            f"## Inner state\n{inputs.inner_state}",
+            f"## How you feel\n{inputs.inner_state}",
             f"## Current awareness\n{inputs.awareness}",
             f"## Goals\n{inputs.goals}",
             OPERATING_RULES.format(now=inputs.now.strftime("%Y-%m-%d %H:%M")),

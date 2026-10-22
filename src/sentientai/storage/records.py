@@ -214,6 +214,7 @@ class GoalRecord(_Record):
     deadline: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+    user_id: str | None = None  # a goal about one person stays in their compartment
 
 
 # -------------------------------------------------------- tool invocations
@@ -375,6 +376,7 @@ class RelationshipRecord(_Record):
     first_met_at: datetime = Field(default_factory=utcnow)
     last_seen_at: datetime = Field(default_factory=utcnow)
     last_reflected_at: datetime | None = None
+    typical_gap_s: float | None = None  # learned rhythm of this person's visits
     history: list[dict[str, Any]] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -382,6 +384,8 @@ class RelationshipRecord(_Record):
 class BeliefStatus(StrEnum):
     ACTIVE = "active"
     REVISED = "revised"
+    CONSIDERING = "considering"  # a possible change Fuzzy hasn't thought through yet
+    KEPT = "kept"  # a considered change Fuzzy decided against
 
 
 class SelfBeliefRecord(_Record):
@@ -400,12 +404,41 @@ class SelfBeliefRecord(_Record):
 
 
 class EmotionEvent(_Record):
+    """A feeling Fuzzy recognised in itself, in its own words."""
+
     id: str = Field(default_factory=lambda: new_id("emo"))
     emotion: str
     intensity: float = Field(ge=0.0, le=1.0)
+    valence: float = Field(default=0.0, ge=-1.0, le=1.0)
+    lingers_s: float = Field(default=3600.0, gt=0)  # Fuzzy's own sense of how long it lasts
     cause: str
-    user_id: str | None = None
+    user_id: str | None = None  # about this person: private to them
     created_at: datetime = Field(default_factory=utcnow)
+
+    def intensity_at(self, now: datetime) -> float:
+        age = max(0.0, (now - self.created_at).total_seconds())
+        return float(self.intensity * 0.5 ** (age / self.lingers_s))
+
+
+class ActivityStatus(StrEnum):
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class ActivityRecord(_Record):
+    """Something Fuzzy chose to do on its own, and why."""
+
+    id: str = Field(default_factory=lambda: new_id("act"))
+    kind: str
+    intent: str
+    reason: str = ""
+    outcome: str = ""
+    status: ActivityStatus = ActivityStatus.RUNNING
+    user_id: str | None = None  # involves this person: private to them
+    detail: dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime = Field(default_factory=utcnow)
+    finished_at: datetime | None = None
 
 
 class NoteRecord(_Record):

@@ -19,6 +19,7 @@ import secrets
 import time
 import unicodedata
 from collections import defaultdict, deque
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -48,6 +49,18 @@ from sentientai.storage.records import (
 log = get_logger(__name__)
 
 _USERNAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$")
+RESERVED_NAMES = (
+    "admin",
+    "administrator",
+    "root",
+    "system",
+    "operator",
+    "someone",
+    "support",
+    "moderator",
+    "anonymous",
+    "agent",
+)
 GENERIC_LOGIN_ERROR = "Incorrect username or password."
 
 
@@ -107,12 +120,14 @@ class AccountService:
         *,
         audit: AuditLog,
         clock: Clock | None = None,
+        reserved: Iterable[str] = (),
     ) -> None:
         self.db = db
         self.config = config
         self.audit = audit
         self.clock = clock or SystemClock()
         self.throttle = LoginThrottle(config.login_attempts_per_ip_per_minute)
+        self.reserved = {n.casefold() for n in (*RESERVED_NAMES, *reserved)}
 
     # ------------------------------------------------------------ accounts
     async def create_user(
@@ -124,19 +139,26 @@ class AccountService:
         role: UserRole = UserRole.USER,
         can_teach: bool = False,
         by: str = "system",
+        check_reserved: bool = False,
     ) -> UserRecord:
+        """Create an account. Reserved names are only refused for self-registration."""
+
         username = username.strip()
         if not _USERNAME.match(username):
             raise AuthError(
                 "Usernames are 3-32 characters: letters, digits, '.', '_' or '-', "
                 "starting with a letter or digit."
             )
+        shown = clean_display_name(display_name or username) or username
+        if check_reserved and (
+            username.casefold() in self.reserved or shown.casefold() in self.reserved
+        ):
+            raise AuthError("That name is reserved. Please choose another.")
         problems = password_problems(
             password, username=username, min_length=self.config.min_password_length
         )
         if problems:
             raise AuthError("Password: " + "; ".join(problems) + ".")
-        shown = clean_display_name(display_name or username) or username
         now = self.clock.now()
         user = UserRecord(
             username=username,
@@ -186,6 +208,7 @@ class AccountService:
             role=invite.role if invite else UserRole.USER,
             can_teach=invite.can_teach if invite else False,
             by="self-registration",
+            check_reserved=True,
         )
         if invite is not None and not await self.db.invites.consume(
             invite.id, user.id, self.clock.now()

@@ -30,7 +30,9 @@ log = get_logger(__name__)
 
 _NARRATIVE_PROMPT = """\
 Rewrite your short autobiography (first person, at most 120 words) so it reflects who you
-are becoming. Keep what still matters from the previous version.
+are becoming. Keep what still matters from the previous version. Only include things that
+actually happened (the previous version or the experiences below), and don't name anyone: this
+story is shown in everyone's conversations.
 
 Previous version: {narrative}
 Recent experiences:

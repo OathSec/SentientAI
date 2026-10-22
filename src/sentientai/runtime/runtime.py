@@ -14,11 +14,12 @@ import asyncio
 import contextlib
 import signal
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from sentientai.cognition.self_model import humanize_duration
 from sentientai.config import ScheduleConfig, Settings, WatchConfig
 from sentientai.core.logging import get_logger, log_context
 from sentientai.models.embeddings import Embedder
@@ -29,10 +30,13 @@ from sentientai.runtime.scheduler import Scheduler
 from sentientai.runtime.watchers import FolderWatcher
 from sentientai.storage.records import (
     ConversationMessage,
+    GoalOrigin,
     MemoryKind,
     TaskRecord,
     TaskSource,
     TaskStatus,
+    UserRecord,
+    UserRole,
 )
 
 log = get_logger(__name__)
@@ -52,6 +56,7 @@ class ChatReply:
     task: TaskRecord
     answer: str
     confidence: float | None
+    media: list[str] = field(default_factory=list)
 
 
 class Runtime:
@@ -65,16 +70,21 @@ class Runtime:
         self._background: list[asyncio.Task[Any]] = []
         self._running: dict[str, asyncio.Task[Any]] = {}
         self._activities: set[asyncio.Task[Any]] = set()
+        # Short follow-up thinking (e.g. forming an opinion of someone after a chat). It never
+        # holds up the next conversation, but stops with the kill switch and at shutdown.
+        self._afterthoughts: set[asyncio.Task[Any]] = set()
         self._done: dict[str, asyncio.Event] = {}
         self._goal_last: dict[str, float] = {}
         clock = components.clock
-        self._last_thought = clock.monotonic()
+        self._next_beat = clock.monotonic() + min(30.0, settings.mind.beat_min_s)
         self._last_consolidation = clock.monotonic()
         self.started_at: datetime | None = None
         self._stop_task: asyncio.Future[None] | None = None
         # Registered at construction: in-flight work must always honour the kill switch.
         components.kill_switch.on_engage(self._on_kill)
         components.bus.subscribe("safety.kill_switch.*", lambda _event: self._update_gauges())
+        components.agency.submit_task = self.submit
+        components.agency.pursue_goal = self._pursue_goal
 
     @classmethod
     async def create(
@@ -92,7 +102,15 @@ class Runtime:
         c = self.c
         now = c.clock.now()
         self.started_at = now
+        previous_shutdown = c.mind.self_model.last_shutdown_at
         c.mind.self_model.on_boot(now)
+        c.interoception.first_boot_at = c.mind.self_model.first_boot_at
+        if c.mind.self_model.boot_count == 1:
+            c.agency.note("You have just come into existence. This is your very first moment.")
+        elif previous_shutdown is not None:
+            offline = humanize_duration((now - previous_shutdown).total_seconds())
+            c.agency.note(f"You woke up after being switched off for {offline}.")
+        await c.db.activities.fail_running(now)
         recovered = await c.db.tasks.recover_interrupted()
         expired = await c.approvals.expire_orphans()
         await c.mind.save(c.db.state)
@@ -119,6 +137,7 @@ class Runtime:
         self._spawn(self._main_loop(), "main-loop")
         self._spawn(self._checkpoint_loop(), "checkpoint")
         self._spawn(c.kill_switch.watch(), "kill-switch-watch")
+        self._spawn(c.world.run(), "world")
         rt = self.settings.runtime
         if rt.schedules:
             scheduler = Scheduler(rt.schedules, self._submit_scheduled, c.db.state, clock=c.clock)
@@ -146,12 +165,14 @@ class Runtime:
             # Unfinished work goes back on the queue and resumes after the next boot.
             for task_id in running:
                 await c.db.tasks.requeue(task_id, f"interrupted by {reason}; will resume")
-        for task in [*self._activities, *self._background]:
+        everything = [*self._activities, *self._afterthoughts, *self._background]
+        for task in everything:
             task.cancel()
-        await asyncio.gather(*self._activities, *self._background, return_exceptions=True)
+        await asyncio.gather(*everything, return_exceptions=True)
         now = c.clock.now()
         c.mind.self_model.on_shutdown(now)
         await c.mind.save(c.db.state)
+        await c.world.save()
         await c.memory.vectors.flush()
         await c.audit.record(
             "runtime.shutdown",
@@ -203,7 +224,7 @@ class Runtime:
 
     async def _on_kill(self, reason: str) -> None:
         running = dict(self._running)
-        handles = [*running.values(), *self._activities]
+        handles = [*running.values(), *self._activities, *self._afterthoughts]
         for handle in handles:
             handle.cancel()
         await asyncio.gather(*handles, return_exceptions=True)
@@ -280,12 +301,34 @@ class Runtime:
         timeout: float | None = None,
         user_id: str | None = None,
         speaker: str | None = None,
+        user: UserRecord | None = None,
     ) -> ChatReply:
+        """A message from someone, and Fuzzy's reply.
+
+        ``user`` is the signed-in person (web app); ``user_id``/``speaker`` without a
+        record are accepted for tools and tests. No user at all means the operator.
+        """
+
         c = self.c
+        if user is not None:
+            user_id, speaker = user.id, user.display_name
+        elif user_id is not None:
+            user = await c.db.users.get(user_id)
         c.mind.affect.on_operator_contact()
+        await c.interoception.note_contact()
+        if user is not None:
+            await c.relationships.on_message(user)
+        # Talking takes Fuzzy's attention: its own activities wait a little.
+        self._next_beat = max(self._next_beat, c.clock.monotonic() + self.settings.mind.beat_min_s)
+        await c.world.set_action("talking")
         await c.db.conversations.insert(
             ConversationMessage(session_id=session_id, user_id=user_id, role="user", content=text)
         )
+        metadata: dict[str, Any] = {}
+        if speaker:
+            metadata["speaker"] = speaker
+        if user is not None:
+            metadata["role"] = "admin" if user.role is UserRole.ADMIN else "user"
         task = await self.submit(
             text,
             source=TaskSource.USER,
@@ -293,21 +336,25 @@ class Runtime:
             session_id=session_id,
             kind="chat",
             user_id=user_id,
-            metadata={"speaker": speaker} if speaker else None,
+            metadata=metadata or None,
         )
-        final = await self.wait(task.id, timeout)
+        try:
+            final = await self.wait(task.id, timeout)
+        finally:
+            await c.world.set_action("standing")
         answer = (
             final.result
             or f"I couldn't complete that ({final.status.value}): {final.error or 'no detail'}"
         )
         confidence = final.metadata.get("confidence")
+        media = [str(m) for m in final.metadata.get("media") or []]
         await c.db.conversations.insert(
             ConversationMessage(
                 session_id=session_id,
                 user_id=user_id,
                 role="assistant",
                 content=answer,
-                metadata={"task_id": final.id},
+                metadata={"task_id": final.id, "media": media},
             )
         )
         await c.memory.add_turn(session_id, "user", text, user_id=user_id)
@@ -325,11 +372,29 @@ class Runtime:
                 dedupe=False,
                 metadata={"task_id": final.id, "session_id": session_id},
             )
+            if user is not None:
+                c.agency.note(f"You talked with {user.display_name}.")
+                if self.settings.mind.appraise_relationships:
+                    self._start_afterthought(
+                        self._after_conversation(user, session_id), f"appraise:{user.id}"
+                    )
         return ChatReply(
             task=final,
             answer=answer,
             confidence=float(confidence) if confidence is not None else None,
+            media=media,
         )
+
+    async def _after_conversation(self, user: UserRecord, session_id: str) -> None:
+        """Fuzzy thinks about the person it just talked with."""
+
+        c = self.c
+        recent = await c.db.conversations.recent(session_id, limit=8)
+        exchange = [(m.role, m.content) for m in recent if m.role in {"user", "assistant"}]
+        await c.relationships.appraise(
+            user, exchange, name=c.mind.self_model.name, mood=c.emotions.mood
+        )
+        c.redactor.invalidate()  # a new nickname is a name to keep private too
 
     async def cancel(self, task_id: str) -> bool:
         running = self._running.get(task_id)
@@ -384,10 +449,12 @@ class Runtime:
         pending_ids = {t.id for t in pending}
         for task in pending:
             salience = min(1.0, _SOURCE_SALIENCE[task.source] + 0.02 * (task.priority - 5))
+            # Awareness is shared with every conversation, so a person's words stay out of it.
+            what = "someone is talking to you" if task.user_id else task.goal[:160]
             ws.submit(
                 source=task.source.value,
                 kind="task",
-                content=f"{task.source.value} request: {task.goal[:160]}",
+                content=f"{task.source.value} request: {what}",
                 salience=salience,
                 key=f"task:{task.id}",
                 task_id=task.id,
@@ -413,8 +480,9 @@ class Runtime:
         idle = not self._running and not self._activities
         now = c.clock.monotonic()
         if idle and rt.autonomy == "proactive":
-            modulation = c.mind.affect.modulation()
             for goal in await c.goals.active():
+                if goal.origin is not GoalOrigin.OPERATOR:
+                    continue  # Fuzzy's own goals are its to pick up (see Agency)
                 if now - self._goal_last.get(goal.id, -1e12) > rt.idle_think_interval_s:
                     ws.submit(
                         source="goals",
@@ -425,16 +493,13 @@ class Runtime:
                         ttl_s=rt.tick_interval_s * 6,
                         goal_id=goal.id,
                     )
-            if (
-                modulation.may_take_initiative
-                and now - self._last_thought > rt.idle_think_interval_s
-            ):
+            if now >= self._next_beat and c.mind.affect.energy > 0.05:
                 ws.submit(
                     source="drive",
                     kind="drive",
-                    content="idle and curious: reflect on recent experience, look for useful work",
-                    salience=0.25 + 0.4 * c.mind.affect.curiosity,
-                    key="drive:think",
+                    content="time to yourself: notice how you feel and decide what to do",
+                    salience=0.3 + 0.3 * c.mind.affect.arousal,
+                    key="drive:live",
                     ttl_s=rt.tick_interval_s * 6,
                 )
         if idle and now - self._last_consolidation > self.settings.memory.consolidation_interval_s:
@@ -463,7 +528,8 @@ class Runtime:
                 await self._pursue_goal(str(percept.payload["goal_id"]))
                 return
             elif percept.kind == "drive":
-                self._start_activity(self._think(), "think")
+                self._next_beat = c.clock.monotonic() + self.settings.mind.beat_min_s
+                self._start_activity(self._live(), "live")
                 return
             elif percept.kind == "maintenance":
                 self._start_activity(self._consolidate(), "consolidate")
@@ -492,6 +558,19 @@ class Runtime:
 
         handle.add_done_callback(done)
 
+    def _start_afterthought(self, coro: Any, name: str) -> None:
+        handle = asyncio.create_task(coro, name=name)
+        self._afterthoughts.add(handle)
+
+        def done(t: asyncio.Task[Any]) -> None:
+            self._afterthoughts.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                log.error(
+                    "afterthought failed", extra={"afterthought": name}, exc_info=t.exception()
+                )
+
+        handle.add_done_callback(done)
+
     def _notify(self, task_id: str) -> None:
         event = self._done.get(task_id)
         if event is not None:
@@ -499,7 +578,10 @@ class Runtime:
 
     async def _execute(self, task: TaskRecord) -> TaskOutcome | None:
         c = self.c
-        c.mind.self_model.last_focus = task.goal[:200]
+        # The story of what Fuzzy was doing is shared; a person's message is not.
+        c.mind.self_model.last_focus = (
+            "a conversation" if task.user_id is not None else task.goal[:200]
+        )
         try:
             outcome = await c.agent.run(task)
         except asyncio.CancelledError:
@@ -527,6 +609,8 @@ class Runtime:
             "duration_s": outcome.duration_s,
             "loop_break": outcome.loop_break,
             "tools": [t.name for t in outcome.tools],
+            "grounding": outcome.grounding,
+            "media": outcome.media,
         }
         await c.db.tasks.save(record)
         c.metrics.tasks.inc(source=task.source.value, status=outcome.status.value)
@@ -569,20 +653,13 @@ class Runtime:
             goal_id=goal.id,
         )
 
-    async def _think(self) -> None:
+    async def _live(self) -> None:
+        """A beat of Fuzzy's own life: it decides what to do, then rests as long as it chose."""
+
         c = self.c
-        self._last_thought = c.clock.monotonic()
-        result = await c.inner_life.think(c.mind.affect)
-        if result is None:
-            return
-        await c.audit.record(
-            "mind.thought",
-            actor="agent",
-            thought=result.thought,
-            insight=result.insight.content if result.insight else None,
-            goal=result.goal.description if result.goal else None,
-        )
-        await c.bus.publish("mind.thought", thought=result.thought[:300])
+        _, rest_s = await c.agency.beat()
+        self._next_beat = c.clock.monotonic() + rest_s
+        await c.mind.save(c.db.state)
 
     async def _consolidate(self) -> None:
         c = self.c
@@ -604,6 +681,7 @@ class Runtime:
             await asyncio.sleep(self.settings.runtime.checkpoint_interval_s)
             try:
                 await self.c.mind.save(self.c.db.state)
+                await self.c.world.save()
                 await self.c.memory.vectors.flush()
             except Exception:
                 log.exception("checkpoint failed")

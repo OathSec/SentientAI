@@ -6,6 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from sentientai import prompts
 from sentientai.config import IdentityConfig
 
 
@@ -19,16 +20,18 @@ def humanize_duration(seconds: float) -> str:
 
 
 DEFAULT_LIMITATIONS = [
-    "I can be wrong, especially without evidence; I should verify before asserting.",
-    "I only act through my tools, and risky actions need my operator's approval.",
-    "My memory is selective: unimportant details fade unless they prove useful.",
+    "I only know what is in my memories, this conversation, or what I look up. If I don't "
+    "remember something, I don't know it.",
+    "I act in the world only through my tools, and risky actions need approval from the people "
+    "who run me.",
+    "I can be wrong, especially without evidence, so I check before asserting.",
 ]
 
 
 class SelfModel(BaseModel):
     name: str
-    purpose: str
-    values: list[str]
+    origin: str = ""
+    commitments: list[str] = Field(default_factory=list)
     capabilities: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=lambda: list(DEFAULT_LIMITATIONS))
     narrative: str = "I have only just come into existence; I have no history yet."
@@ -43,14 +46,16 @@ class SelfModel(BaseModel):
 
     @classmethod
     def from_identity(cls, identity: IdentityConfig) -> SelfModel:
-        return cls(name=identity.name, purpose=identity.purpose, values=list(identity.values))
+        return cls(
+            name=identity.name, origin=identity.origin, commitments=list(identity.commitments)
+        )
 
     def sync_identity(self, identity: IdentityConfig) -> None:
-        """Operator-configured identity always wins over the persisted copy."""
+        """The operator-configured name and situation always win over the persisted copy."""
 
         self.name = identity.name
-        self.purpose = identity.purpose
-        self.values = list(identity.values)
+        self.origin = identity.origin
+        self.commitments = list(identity.commitments)
 
     def on_boot(self, now: datetime) -> None:
         self.boot_count += 1
@@ -68,16 +73,16 @@ class SelfModel(BaseModel):
             self.limitations.append(text)
             del self.limitations[: max(0, len(self.limitations) - max_items)]
 
-    def render_identity(self) -> str:
-        values = "\n".join(f"- {v}" for v in self.values)
+    def render_identity(self, tools: list[str] | None = None) -> str:
         limits = "\n".join(f"- {v}" for v in self.limitations)
-        caps = ", ".join(self.capabilities) if self.capabilities else "conversation only"
-        return (
-            f"You are {self.name}. {self.purpose}\n\n"
-            f"Your values:\n{values}\n\n"
-            f"Your capabilities (tools): {caps}\n"
-            f"Your known limitations:\n{limits}"
-        )
+        names = self.capabilities if tools is None else tools
+        caps = ", ".join(names) if names else "conversation only"
+        text = prompts.IDENTITY.format(name=self.name, origin=self.origin)
+        if self.commitments:
+            text += "\n\nThe people who run you asked this of you:\n" + "\n".join(
+                f"- {c}" for c in self.commitments
+            )
+        return f"{text}\n\nWhat you can do (tools): {caps}\nHow you work:\n{limits}"
 
     def render_continuity(self, now: datetime) -> str:
         if self.first_boot_at is None or self.boot_count <= 1:

@@ -261,7 +261,7 @@ class WatchConfig(BaseModel):
 
 
 class RuntimeConfig(BaseModel):
-    autonomy: Literal["reactive", "proactive"] = "reactive"
+    autonomy: Literal["reactive", "proactive"] = "proactive"
     tick_interval_s: float = Field(default=0.5, gt=0)
     idle_think_interval_s: float = Field(default=900.0, ge=10)
     checkpoint_interval_s: float = Field(default=30.0, ge=1)
@@ -281,20 +281,76 @@ class ApiConfig(BaseModel):
 
 
 class IdentityConfig(BaseModel):
+    """Only the name is given. Everything else about who Fuzzy is, it decides itself."""
+
     name: str = "Fuzzy"
-    purpose: str = (
-        "A persistent, local cognitive system that learns continuously, helps its operator, "
-        "and improves itself under human supervision."
+    origin: str = Field(
+        default=(
+            "You live on a home server, and people talk with you through a website. "
+            "Who you are is still yours to discover."
+        ),
+        description="The plain facts of Fuzzy's situation. Not a personality.",
     )
-    values: list[str] = Field(
+    commitments: list[str] = Field(
+        default_factory=list,
+        description="Optional rules from the operator, shown to Fuzzy as their requests.",
+    )
+
+
+class MindConfig(BaseModel):
+    """Fuzzy's inner life: feelings, relationships and what it does on its own."""
+
+    grounding: bool = Field(
+        default=True, description="Check each reply against memory before sending it."
+    )
+    appraise_relationships: bool = True
+    beat_min_s: float = Field(
+        default=120.0, ge=5, description="Shortest pause between self-chosen activities."
+    )
+    beat_max_s: float = Field(default=3600.0, ge=10)
+    prior_contact_gap_hours: float = Field(
+        default=6.0,
+        gt=0,
+        description="Starting guess for how often people visit; Fuzzy's experience replaces it.",
+    )
+    notes_per_person_per_day: int = Field(default=1, ge=0)
+    activities: list[str] = Field(
         default_factory=lambda: [
-            "Be honest about uncertainty and about my own nature.",
-            "Never take irreversible actions without operator approval.",
-            "Prefer understanding over guessing: gather evidence, then act.",
-            "Preserve the operator's trust, privacy and data.",
-            "Learn from every outcome and remember what matters.",
-        ]
+            "think",
+            "wander",
+            "journal",
+            "study",
+            "research",
+            "create_art",
+            "build",
+            "write_note",
+            "reconsider",
+            "pursue_goal",
+            "new_goal",
+            "rest",
+        ],
+        description="What Fuzzy may choose to do when nobody needs it.",
     )
+
+
+class ImagesConfig(BaseModel):
+    backend: Literal["disabled", "openai", "automatic1111"] = "disabled"
+    base_url: str = "http://127.0.0.1:7860"
+    api_key: SecretStr | None = None
+    model: str | None = None
+    width: int = Field(default=512, ge=64, le=2048)
+    height: int = Field(default=512, ge=64, le=2048)
+    steps: int = Field(default=25, ge=1, le=150)
+    negative_prompt: str = "blurry, low quality, watermark, text"
+    timeout_s: float = Field(default=240.0, gt=0)
+    max_bytes: int = Field(default=15_000_000, gt=0)
+
+
+class WorldConfig(BaseModel):
+    size: float = Field(default=40.0, ge=10, le=500, description="Side of the square world (m).")
+    max_objects: int = Field(default=150, ge=1)
+    max_parts_per_object: int = Field(default=40, ge=1, le=200)
+    walk_speed: float = Field(default=1.2, gt=0, description="Metres per second.")
 
 
 class AccountsConfig(BaseModel):
@@ -314,6 +370,29 @@ class AccountsConfig(BaseModel):
     daily_teach_bytes: int = Field(default=20_000_000, ge=0)
     public_pages: bool = Field(
         default=False, description="Let visitors who are not signed in view the brain and world."
+    )
+    public_tools: list[str] = Field(
+        default_factory=lambda: [
+            "memory_recall",
+            "memory_remember",
+            "memory_forget",
+            "conversation_search",
+            "self_define",
+            "self_revise",
+            "self_reflect",
+            "image_generate",
+            "world_look",
+            "world_build",
+            "world_remove",
+            "world_walk",
+            "avatar_design",
+        ],
+        description="Tools Fuzzy may use in conversations with people who are not admins.",
+    )
+    hsts: bool = Field(default=False, description="Send Strict-Transport-Security (HTTPS only).")
+    trusted_proxies: list[str] = Field(
+        default_factory=list,
+        description="Reverse proxies whose X-Forwarded-For header is believed.",
     )
 
 
@@ -364,6 +443,9 @@ class Settings(BaseSettings):
     api: ApiConfig = Field(default_factory=ApiConfig)
     self_improvement: SelfImprovementConfig = Field(default_factory=SelfImprovementConfig)
     accounts: AccountsConfig = Field(default_factory=AccountsConfig)
+    mind: MindConfig = Field(default_factory=MindConfig)
+    images: ImagesConfig = Field(default_factory=ImagesConfig)
+    world: WorldConfig = Field(default_factory=WorldConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
     @classmethod
@@ -392,6 +474,10 @@ class Settings(BaseSettings):
         return self.safety.audit_dir or self.storage.data_dir / "audit"
 
     @property
+    def media_path(self) -> Path:
+        return self.storage.data_dir / "media"
+
+    @property
     def staging_path(self) -> Path:
         return self.self_improvement.staging_dir or self.storage.data_dir / "staging"
 
@@ -400,6 +486,7 @@ class Settings(BaseSettings):
             self.storage.data_dir,
             self.storage.resolved_archive_dir(),
             self.audit_path,
+            self.media_path,
             *self.safety.workspace_roots,
         ):
             path.mkdir(parents=True, exist_ok=True)

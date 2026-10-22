@@ -32,7 +32,13 @@ class ToolContext:
     user_id: str | None = None  # the person this work is for (their memory compartment)
     autonomous: bool = False
     scratch_dir: Path | None = None
+    # People who aren't admins get a restricted toolset and their own quotas.
+    allowed_tools: frozenset[str] | None = None
+    privileged: bool = True
     extras: dict[str, Any] = field(default_factory=dict)
+
+    def may_use(self, tool: str) -> bool:
+        return self.allowed_tools is None or tool in self.allowed_tools
 
 
 class ToolResult(BaseModel):

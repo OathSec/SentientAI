@@ -5,9 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from sentientai.accounts.data import UserDataService
+from sentientai.accounts.quotas import Quotas
+from sentientai.accounts.service import AccountService
+from sentientai.cognition.agency import Agency
+from sentientai.cognition.emotions import Emotions
 from sentientai.cognition.goals import GoalManager
-from sentientai.cognition.inner_life import InnerLife
+from sentientai.cognition.grounding import Grounding
+from sentientai.cognition.interoception import Interoception
 from sentientai.cognition.mind import Mind
+from sentientai.cognition.persona import Persona
+from sentientai.cognition.privacy import Redactor
+from sentientai.cognition.selfhood import SelfConcept
+from sentientai.cognition.social import Relationships
 from sentientai.cognition.workspace import GlobalWorkspace
 from sentientai.config import Settings
 from sentientai.core.clock import Clock, SystemClock
@@ -16,6 +26,7 @@ from sentientai.core.logging import get_logger
 from sentientai.core.metrics import Metrics
 from sentientai.errors import SandboxError
 from sentientai.ingestion.pipeline import IngestionPipeline
+from sentientai.media.images import ImageBackend, ImageService
 from sentientai.memory.consolidation import MemoryConsolidator
 from sentientai.memory.factory import build_memory
 from sentientai.memory.system import MemorySystem
@@ -40,7 +51,10 @@ from sentientai.tools.filesystem import Workspace, filesystem_tools
 from sentientai.tools.memory_tools import memory_tools
 from sentientai.tools.repository import repository_tools
 from sentientai.tools.sandbox import SandboxBackend, build_sandbox, sandbox_tools
+from sentientai.tools.self_tools import self_tools
 from sentientai.tools.web import WebClient, web_tools
+from sentientai.tools.world_tools import media_tools, world_tools
+from sentientai.world.service import World
 
 log = get_logger(__name__)
 
@@ -69,12 +83,29 @@ class Components:
     mind: Mind
     agent: CognitiveAgent
     reflector: Reflector
-    inner_life: InnerLife
     analyzer: PerformanceAnalyzer
     improvement: SelfImprovementEngine | None
+    selfhood: SelfConcept
+    emotions: Emotions
+    relationships: Relationships
+    interoception: Interoception
+    redactor: Redactor
+    persona: Persona
+    agency: Agency
+    world: World
+    images: ImageService
+    quotas: Quotas
+    accounts: AccountService
+    user_data: UserDataService
 
     async def aclose(self) -> None:
-        for closer in (self.memory.aclose, self.router.aclose, self.web.aclose, self.db.close):
+        for closer in (
+            self.memory.aclose,
+            self.router.aclose,
+            self.web.aclose,
+            self.images.aclose,
+            self.db.close,
+        ):
             try:
                 await closer()
             except Exception:  # pragma: no cover - best effort shutdown
@@ -88,6 +119,7 @@ async def build_components(
     embedder: Embedder | None = None,
     clock: Clock | None = None,
     extra_tools: list[Tool[Any]] | None = None,
+    image_backend: ImageBackend | None = None,
 ) -> Components:
     clock = clock or SystemClock()
     settings.ensure_directories()
@@ -161,6 +193,44 @@ async def build_components(
         else None
     )
 
+    # Fuzzy's self, feelings, relationships, world and creations.
+    selfhood = SelfConcept(db.self_beliefs, router=router, audit=audit, bus=bus, clock=clock)
+    emotions = Emotions(db.emotions, mind.affect, state=db.state, bus=bus, clock=clock)
+    await emotions.load()
+    relationships = Relationships(
+        db.relationships, router=router, emotions=emotions, audit=audit, bus=bus, clock=clock
+    )
+    interoception = Interoception(
+        db,
+        embedder=memory.embedder,
+        affect=mind.affect,
+        relationships=relationships,
+        config=settings.mind,
+        clock=clock,
+        first_boot_at=mind.self_model.first_boot_at,
+    )
+    await interoception.load()
+    redactor = Redactor(db)
+    persona = Persona(
+        db, selfhood=selfhood, emotions=emotions, relationships=relationships, redactor=redactor
+    )
+    world = World(db, settings.world, audit=audit, bus=bus, clock=clock)
+    await world.load()
+    images = ImageService(
+        settings.images,
+        db,
+        settings.media_path,
+        audit=audit,
+        bus=bus,
+        clock=clock,
+        backend=image_backend,
+    )
+    quotas = Quotas(db.usage, settings.accounts, clock=clock)
+    accounts = AccountService(
+        db, settings.accounts, audit=audit, clock=clock, reserved=[settings.identity.name]
+    )
+    user_data = UserDataService(db, memory, audit=audit)
+
     registry = ToolRegistry()
     tools: list[Tool[Any]] = [
         *filesystem_tools(workspace),
@@ -168,6 +238,9 @@ async def build_components(
         *web_tools(web),
         *memory_tools(memory, pipeline, workspace),
         *cognitive_tools(goals, analyzer, improvement),
+        *self_tools(selfhood, db.conversations),
+        *world_tools(world),
+        *media_tools(images, quotas),
     ]
     if sandbox is not None:
         tools += sandbox_tools(sandbox, settings.sandbox, settings.storage.data_dir / "sandbox")
@@ -197,6 +270,26 @@ async def build_components(
         kill_switch=kill_switch,
         metrics=metrics,
         clock=clock,
+        persona=persona,
+        grounding=Grounding(router, selfhood, audit=audit),
+    )
+    agency = Agency(
+        settings=settings,
+        router=router,
+        memory=memory,
+        db=db,
+        self_model=mind.self_model,
+        selfhood=selfhood,
+        emotions=emotions,
+        relationships=relationships,
+        interoception=interoception,
+        goals=goals,
+        world=world,
+        images=images,
+        redactor=redactor,
+        audit=audit,
+        bus=bus,
+        clock=clock,
     )
     reflector = Reflector(
         router, memory, mind, min_fact_confidence=settings.memory.min_fact_confidence
@@ -224,7 +317,18 @@ async def build_components(
         mind=mind,
         agent=agent,
         reflector=reflector,
-        inner_life=InnerLife(router, memory, goals),
         analyzer=analyzer,
         improvement=improvement,
+        selfhood=selfhood,
+        emotions=emotions,
+        relationships=relationships,
+        interoception=interoception,
+        redactor=redactor,
+        persona=persona,
+        agency=agency,
+        world=world,
+        images=images,
+        quotas=quotas,
+        accounts=accounts,
+        user_data=user_data,
     )

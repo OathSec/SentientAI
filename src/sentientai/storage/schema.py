@@ -158,6 +158,7 @@ goals = Table(
     Column("deadline", UTCDateTime),
     Column("created_at", UTCDateTime, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
+    Column("user_id", String(48)),
 )
 
 tool_invocations = Table(
@@ -285,6 +286,7 @@ relationships = Table(
     Column("first_met_at", UTCDateTime, nullable=False),
     Column("last_seen_at", UTCDateTime, nullable=False),
     Column("last_reflected_at", UTCDateTime),
+    Column("typical_gap_s", Float),
     Column("history", JsonType, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
 )
@@ -311,10 +313,28 @@ emotion_events = Table(
     Column("id", String(48), primary_key=True),
     Column("emotion", String(48), nullable=False),
     Column("intensity", Float, nullable=False),
+    Column("valence", Float, nullable=False),
+    Column("lingers_s", Float, nullable=False),
     Column("cause", Text, nullable=False),
     Column("user_id", String(48)),
     Column("created_at", UTCDateTime, nullable=False),
     Index("ix_emotion_events_created", "created_at"),
+)
+
+activities = Table(
+    "activities",
+    metadata,
+    Column("id", String(48), primary_key=True),
+    Column("kind", String(32), nullable=False),
+    Column("intent", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("status", String(16), nullable=False),
+    Column("user_id", String(48)),
+    Column("detail", JsonType, nullable=False),
+    Column("started_at", UTCDateTime, nullable=False),
+    Column("finished_at", UTCDateTime),
+    Index("ix_activities_started", "started_at"),
 )
 
 notes = Table(
@@ -364,5 +384,6 @@ ADDED_COLUMNS: dict[int, list[tuple[str, str, str]]] = {
         ("memories", "user_id", "VARCHAR(48)"),
         ("tasks", "user_id", "VARCHAR(48)"),
         ("conversation_messages", "user_id", "VARCHAR(48)"),
+        ("goals", "user_id", "VARCHAR(48)"),
     ],
 }

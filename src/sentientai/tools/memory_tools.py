@@ -14,7 +14,9 @@ from sentientai.storage.records import MemoryKind, Scope
 from sentientai.tools.base import Tool, ToolArgs, ToolContext, ToolResult
 from sentientai.tools.filesystem import Workspace
 
-KindName = Literal["fact", "episode", "procedure", "document", "summary", "reflection", "thought"]
+KindName = Literal[
+    "fact", "episode", "procedure", "document", "summary", "reflection", "thought", "conversation"
+]
 
 
 class RecallArgs(ToolArgs):

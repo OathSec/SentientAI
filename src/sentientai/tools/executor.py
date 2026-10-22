@@ -74,6 +74,11 @@ class ToolExecutor:
         self, call: ToolCall, ctx: ToolContext, guard: LoopGuard | None = None
     ) -> ToolResult:
         tool = self.registry.get(call.name)
+        if tool is not None and not ctx.may_use(call.name):
+            await self.audit.record(
+                "tool.restricted", task_id=ctx.task_id, tool=call.name, user_id=ctx.user_id
+            )
+            return ToolResult.failure(f"{call.name} isn't available in this conversation")
         if tool is None:
             return ToolResult.failure(
                 f"unknown tool {call.name!r}. Available tools: {', '.join(self.registry.names)}"

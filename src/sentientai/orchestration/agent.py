@@ -14,8 +14,10 @@ import time
 from dataclasses import dataclass, field
 
 from sentientai.cognition.goals import GoalManager
+from sentientai.cognition.grounding import Grounding
 from sentientai.cognition.metacognition import Assessment, Metacognition
 from sentientai.cognition.mind import Mind
+from sentientai.cognition.persona import Persona, Perspective
 from sentientai.config import Settings
 from sentientai.core.clock import Clock, SystemClock
 from sentientai.core.events import EventBus
@@ -23,6 +25,7 @@ from sentientai.core.logging import get_logger, log_context
 from sentientai.core.metrics import Metrics
 from sentientai.errors import KillSwitchEngagedError, LoopBreakError, ModelError
 from sentientai.memory.system import MemorySystem
+from sentientai.memory.working import Turn
 from sentientai.models.router import ModelRouter
 from sentientai.models.types import (
     ChatRequest,
@@ -38,7 +41,7 @@ from sentientai.orchestration.planner import Planner
 from sentientai.safety.audit import AuditLog
 from sentientai.safety.killswitch import KillSwitch
 from sentientai.safety.limits import LoopGuard
-from sentientai.storage.records import Scope, ScoredMemory, TaskRecord, TaskStatus
+from sentientai.storage.records import Scope, ScoredMemory, TaskRecord, TaskSource, TaskStatus
 from sentientai.tools.base import ToolContext, ToolRegistry
 from sentientai.tools.executor import ToolExecutor
 
@@ -76,6 +79,8 @@ class TaskOutcome:
     tools: list[ToolTrace] = field(default_factory=list)
     procedures_used: list[str] = field(default_factory=list)
     novelty: float = 0.0
+    grounding: dict[str, object] | None = None
+    media: list[str] = field(default_factory=list)
     transcript: list[Message] = field(default_factory=list)
 
     @property
@@ -107,8 +112,12 @@ class CognitiveAgent:
         kill_switch: KillSwitch,
         metrics: Metrics | None = None,
         clock: Clock | None = None,
+        persona: Persona | None = None,
+        grounding: Grounding | None = None,
     ) -> None:
         self.settings = settings
+        self.persona = persona
+        self.grounding = grounding
         self.router = router
         self.memory = memory
         self.registry = registry
@@ -204,6 +213,8 @@ class CognitiveAgent:
 
     async def _run(self, task: TaskRecord, guard: LoopGuard, outcome: TaskOutcome) -> None:
         mind = self.mind
+        # People who aren't admins get a restricted toolset; the operator and admins don't.
+        privileged = task.metadata.get("role") != "user"
         # A conversation sees shared memories plus this person's compartment, nothing else.
         recalled = await self.memory.recall(task.goal, scope=Scope.for_user(task.user_id))
         procedures = await self.memory.find_procedures(task.goal)
@@ -228,20 +239,36 @@ class CognitiveAgent:
         reserve = self._reserve(tier_for_window)
         history = await self.memory.conversation(task.session_id) if task.session_id else []
         now = self.clock.now()
+        allowed = None if privileged else frozenset(self.settings.accounts.public_tools)
         mind.self_model.capabilities = self.registry.names
+        tool_names = [n for n in self.registry.names if allowed is None or n in allowed]
+        perspective = (
+            await self.persona.perspective(task.user_id, privileged=privileged)
+            if self.persona is not None
+            else None
+        )
+        redact = perspective.redact if perspective else (lambda text: text)
+        if task.user_id is not None:
+            goal_scope = Scope.for_user(task.user_id)
+        elif task.source in (TaskSource.USER, TaskSource.API):
+            goal_scope = Scope.system()  # the operator
+        else:
+            goal_scope = Scope()
         messages = self.builder.build(
             FramingInputs(
                 goal=task.goal,
-                identity=mind.self_model.render_identity(),
-                continuity=mind.self_model.render_continuity(now),
-                inner_state=mind.affect.describe(),
-                awareness=mind.workspace.render(),
-                goals=GoalManager.render(await mind.goals.active()),
+                identity=mind.self_model.render_identity(tool_names),
+                continuity=redact(mind.self_model.render_continuity(now)),
+                inner_state=perspective.feelings if perspective else mind.affect.describe(),
+                awareness=redact(mind.workspace.render()),
+                goals=redact(GoalManager.render(await mind.goals.active(goal_scope))),
                 memories=recalled,
                 procedures=procedures,
                 plan=plan_text,
                 history=history,
                 now=now,
+                beliefs=perspective.beliefs if perspective else "",
+                person=perspective.person if perspective else None,
             ),
             window=window,
             reserve_output=reserve,
@@ -253,11 +280,13 @@ class CognitiveAgent:
             user_id=task.user_id,
             autonomous=task.source.autonomous,
             scratch_dir=self.settings.storage.data_dir / "sandbox" / task.id,
+            allowed_tools=allowed,
+            privileged=privileged,
         )
         temperature = self._temperature(tier_for_window, modulation.temperature_offset)
 
         answer, response = await self._converse(
-            outcome, guard, ctx, kind=kind, prefer=prefer, temperature=temperature
+            outcome, guard, ctx, kind=kind, prefer=prefer, temperature=temperature, allowed=allowed
         )
         outcome.tier = response.tier
         assessment = await self._assess(task, answer, outcome, guard, recalled)
@@ -276,13 +305,67 @@ class CognitiveAgent:
                 )
             )
             answer, response = await self._converse(
-                outcome, guard, ctx, kind=kind, prefer=ModelTier.HEAVY, temperature=temperature
+                outcome,
+                guard,
+                ctx,
+                kind=kind,
+                prefer=ModelTier.HEAVY,
+                temperature=temperature,
+                allowed=allowed,
             )
             outcome.tier = response.tier
             outcome.escalated = True
             assessment = await self._assess(task, answer, outcome, guard, recalled)
+        if task.kind == "chat" and self.grounding is not None and self.settings.mind.grounding:
+            answer = await self._ground(task, answer, outcome, perspective, recalled, history)
         outcome.answer = answer
         outcome.assessment = assessment
+
+    async def _ground(
+        self,
+        task: TaskRecord,
+        answer: str,
+        outcome: TaskOutcome,
+        perspective: Perspective | None,
+        recalled: list[ScoredMemory],
+        history: list[Turn],
+    ) -> str:
+        assert self.grounding is not None
+        parts = []
+        if perspective is not None:
+            parts.append(f"## Its decisions about itself\n{perspective.beliefs}")
+            if perspective.person:
+                parts.append(f"## The person\n{perspective.person}")
+        parts.append(
+            "## Its memories\n"
+            + ("\n".join(f"- {m.record.content[:600]}" for m in recalled[:12]) or "- none recalled")
+        )
+        dialogue = [t for t in history if t.role in {"user", "assistant"}][-12:]
+        if dialogue:
+            parts.append(
+                "## Earlier in this conversation\n"
+                + "\n".join(f"{t.role}: {t.content[:800]}" for t in dialogue)
+            )
+        tool_output = [m for m in outcome.transcript if m.role is Role.TOOL][-6:]
+        if tool_output:
+            parts.append(
+                "## Tool results\n" + "\n".join(f"[{m.name}] {m.text[:1500]}" for m in tool_output)
+            )
+        result = await self.grounding.check(
+            name=self.mind.self_model.name,
+            message=task.goal,
+            reply=answer,
+            evidence="\n\n".join(parts),
+            source=f"conversation:{task.user_id}" if task.user_id else "conversation",
+            task_id=task.id,
+        )
+        outcome.grounding = {
+            "revised": result.revised,
+            "unsupported": result.unsupported,
+            "contradictions": result.contradictions,
+            "new_beliefs": result.new_beliefs,
+        }
+        return result.reply
 
     async def _converse(
         self,
@@ -293,8 +376,9 @@ class CognitiveAgent:
         kind: TaskKind,
         prefer: ModelTier | None,
         temperature: float | None,
+        allowed: frozenset[str] | None = None,
     ) -> tuple[str, ChatResponse]:
-        tools = self.registry.schemas()
+        tools = self.registry.schemas(names=sorted(allowed) if allowed is not None else None)
         nudged = False
         while True:
             guard.begin_step()
@@ -327,6 +411,8 @@ class CognitiveAgent:
                 for call in message.tool_calls:
                     result = await self.executor.execute(call, ctx, guard)
                     outcome.tools.append(ToolTrace(call.name, result.ok, result.output[:200]))
+                    if result.ok and isinstance(result.data, dict) and result.data.get("media_id"):
+                        outcome.media.append(str(result.data["media_id"]))
                     if not result.ok and "denied" in result.output:
                         self.mind.affect.on_denied_action()
                     outcome.transcript.append(Message.tool(call.id, call.name, result.for_model()))

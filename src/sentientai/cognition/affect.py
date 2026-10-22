@@ -158,8 +158,8 @@ class AffectState(BaseModel):
         coherence = level(self.coherence, ("scattered", "mostly coherent", "clear"))
         return (
             f"I feel {feeling} (mood {mood}). Curiosity is {curiosity}, confidence in my "
-            f"abilities is {competence}, energy is {energy}, and I feel {social} to my operator. "
-            f"My thinking feels {coherence}."
+            f"abilities is {competence}, energy is {energy}, and I feel {social} to the people "
+            f"I know. My thinking feels {coherence}."
         )
 
     def snapshot(self) -> dict[str, float]:
