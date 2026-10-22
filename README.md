@@ -1,5 +1,7 @@
 # SentientAI
 
+Project repository: https://github.com/OathSec/SentientAI
+
 A local, persistent, autonomous AI project designed to function as a digital cognitive system: a long-running agent with memory, reasoning, tool use, and environmental interaction. The goal is not simply to make a chat bot, but to build the closest practical version of a persistent AI "brain" using local hardware, massive storage, memory retrieval, and agentic workflows.
 
 This project is intended to evolve from a strong local base model into a self-improving, context-aware AI assistant that can code, reason, research, plan, and retain knowledge over time.
