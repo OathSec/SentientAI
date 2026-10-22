@@ -82,6 +82,7 @@ now are offered:
 | create_art | Describe and generate an image (if image generation is set up); it goes in the public gallery. |
 | build | Act in its world: build anywhere on its ground, rebuild or remove things (including its own earlier work), make the ground bigger, or redesign its own avatar. |
 | walk | Walk to a place it chooses, thinking aloud on the way. |
+| free | Open-ended time: Fuzzy sets itself a project and works on it as an autonomous task with every tool it has (web, workspace files, code in the sandbox, its world, memory). Nothing decides what it does; the safety rules (risk policy, approvals, step/token limits, kill switch) still apply. How it turned out is added to the activity when the task finishes. |
 | write_note | Leave a note for someone it misses (limited per person per day, never stacked on an unread one). |
 | reconsider | Deliberate on a possible change to who it is. |
 | pursue_goal / new_goal | Work on, or set, its own goals (bounded; autonomous work runs under the stricter autonomous safety thresholds). |

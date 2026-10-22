@@ -796,3 +796,40 @@ async def test_the_brain_still_loads_when_the_embedding_server_is_down(
 
     rt.c.interoception.embedder.embed = down  # type: ignore[method-assign]
     assert (await rt.c.interoception.sense()).sameness is None
+
+
+async def test_open_ended_time_becomes_its_own_task_and_the_result_is_shown_when_done(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    from sentientai.orchestration.agent import TaskOutcome
+    from sentientai.storage.records import TaskStatus
+
+    rt = await runtime_factory(
+        Brain(beat=beat("free", "learn how lighthouses work, then build one")), start=False
+    )
+    c = rt.c
+    activity, _ = await c.agency.beat()
+    assert activity is not None and activity.kind == "free"
+    assert "Started on it" in activity.outcome
+    [task] = await c.db.tasks.list()
+    assert task.source is TaskSource.INTRINSIC and "lighthouses" in task.goal
+    assert "world_build" in c.registry.names_for(autonomous=task.source.autonomous, allowed=None)
+    await rt._after_task(
+        task,
+        TaskOutcome(
+            task_id=task.id,
+            status=TaskStatus.SUCCEEDED,
+            answer="I read about Fresnel lenses and built a small lighthouse.",
+        ),
+    )
+    [shown] = await c.db.activities.recent(limit=5)
+    assert shown.id == activity.id and "Fresnel lenses" in shown.outcome
+    assert shown.status is ActivityStatus.DONE
+
+
+async def test_the_open_ended_activity_is_on_offer_by_default(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    rt = await runtime_factory(Brain(), start=False)
+    options = await rt.c.agency._options(await rt.c.interoception.sense(), {})
+    assert "free" in options

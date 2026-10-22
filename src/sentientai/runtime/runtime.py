@@ -29,6 +29,7 @@ from sentientai.runtime.container import Components, build_components
 from sentientai.runtime.scheduler import Scheduler
 from sentientai.runtime.watchers import FolderWatcher
 from sentientai.storage.records import (
+    ActivityStatus,
     ConversationMessage,
     GoalOrigin,
     MemoryKind,
@@ -640,6 +641,26 @@ class Runtime:
                     await c.reflector.reflect(task, outcome)
             except Exception:
                 log.exception("reflection failed", extra={"task_id": task.id})
+        activity_id = task.metadata.get("activity_id")
+        if activity_id:  # an activity Fuzzy started on its own: show how it turned out
+            result = (outcome.answer or outcome.error or "").strip()
+            status = (
+                ActivityStatus.DONE
+                if outcome.status is TaskStatus.SUCCEEDED
+                else ActivityStatus.FAILED
+            )
+            now = c.clock.now()
+            await c.db.activities.finish(str(activity_id), status, result[:40_000], now)
+            await c.bus.publish(
+                "mind.activity",
+                id=str(activity_id),
+                kind=str(task.metadata.get("activity_kind", "task")),
+                intent=str(task.metadata.get("activity_intent", ""))[:300],
+                reason="",
+                outcome=result[:40_000],
+                status=status.value,
+                user_id=None,
+            )
         if task.goal_id:
             with contextlib.suppress(KeyError):
                 await c.goals.update(

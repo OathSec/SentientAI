@@ -65,6 +65,10 @@ DESCRIPTIONS = {
     "study": "read something people taught you",
     "research": "go out on the web and find something out that you're curious about",
     "walk": "walk somewhere in your world, just because you want to be there",
+    "free": (
+        "do anything you want with all the tools you have (the web, files, running code, "
+        "your world, your memory): an open-ended project of your own, as long as you like"
+    ),
     "create_art": "make a picture",
     "build": (
         "shape your world: build, rebuild or remove things, make the ground bigger, "
@@ -82,6 +86,7 @@ _WORLD_ACTION: dict[str, Action] = {
     "journal": "thinking",
     "study": "thinking",
     "research": "thinking",
+    "free": "thinking",
     "create_art": "creating",
     "build": "building",
     "walk": "walking",
@@ -303,7 +308,7 @@ class Agency:
         if signals.unread:
             available.add("study")
         if self.submit_task is not None:
-            available.add("research")
+            available.update({"research", "free"})
         if self.images.available:
             available.add("create_art")
         if self.config.notes_per_person_per_day > 0 and any(
@@ -614,9 +619,42 @@ class Agency:
             "(kind 'fact' for facts, 'reflection' for your own conclusions).",
             source=TaskSource.INTRINSIC,
             priority=3,
-            metadata={"activity_id": activity.id},
+            metadata={
+                "activity_id": activity.id,
+                "activity_kind": choice.kind,
+                "activity_intent": choice.intent,
+            },
         )
         return f"Started looking into it (task {task.id})."
+
+    async def _do_free(self, choice: Choice, activity: ActivityRecord, signals: BodySignals) -> str:
+        """Open-ended time: Fuzzy sets itself a task and works on it with every tool it has.
+
+        Nothing decides what it does with the time. It runs as an autonomous task, so the usual
+        safety rules (risk policy, approvals, step and token limits, kill switch) still apply.
+        """
+
+        assert self.submit_task is not None
+        task = await self.submit_task(
+            "This time is your own, and you chose how to use it. What you decided to do: "
+            f"{choice.intent}\n"
+            + (f"Why you wanted to: {choice.why}\n" if choice.why else "")
+            + "Use whatever tools you have and whatever steps it takes: look things up on the web, "
+            "read and write files in your workspace, run code, build in your world, search or add "
+            "to your memory. Keep what matters with memory_remember, and finish by saying, in "
+            "your own words, what you did and what came of it.",
+            source=TaskSource.INTRINSIC,
+            priority=3,
+            metadata={
+                "activity_id": activity.id,
+                "activity_kind": choice.kind,
+                "activity_intent": choice.intent,
+            },
+        )
+        activity.detail["task_id"] = task.id
+        return (
+            f"Started on it (task {task.id}). What comes of it will be added here when it's done."
+        )
 
     async def _do_create_art(
         self, choice: Choice, activity: ActivityRecord, signals: BodySignals

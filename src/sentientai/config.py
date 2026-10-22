@@ -341,6 +341,7 @@ class MindConfig(BaseModel):
             "journal",
             "study",
             "research",
+            "free",
             "create_art",
             "build",
             "walk",
