@@ -28,9 +28,21 @@ from sentientai.memory.vector import VectorItem, VectorStore
 from sentientai.memory.working import Turn, WorkingMemory
 from sentientai.models.embeddings import Embedder
 from sentientai.storage.database import Database
-from sentientai.storage.records import MemoryKind, MemoryRecord, MemoryStatus, ScoredMemory
+from sentientai.storage.records import (
+    MemoryKind,
+    MemoryRecord,
+    MemoryStatus,
+    Scope,
+    ScoredMemory,
+    scope_key,
+)
 
 log = get_logger(__name__)
+
+
+def _item(record: MemoryRecord, vector: list[float]) -> VectorItem:
+    return VectorItem(record.id, vector, record.kind.value, scope_key(record.user_id))
+
 
 _SECONDS_PER_DAY = 86400.0
 
@@ -99,9 +111,7 @@ class MemorySystem:
         if not records:
             return
         vectors = await self._embed_documents([r.content for r in records])
-        await self.vectors.upsert(
-            [VectorItem(r.id, v, r.kind.value) for r, v in zip(records, vectors, strict=True)]
-        )
+        await self.vectors.upsert([_item(r, v) for r, v in zip(records, vectors, strict=True)])
 
     # ------------------------------------------------------------- writes
     async def remember(
@@ -115,7 +125,10 @@ class MemorySystem:
         metadata: dict[str, Any] | None = None,
         source: str = "agent",
         dedupe: bool = True,
+        user_id: str | None = None,
     ) -> MemoryRecord:
+        """Store a memory. ``user_id`` makes it private to that person (and to Fuzzy)."""
+
         content = content.strip()
         if not content:
             raise ValueError("cannot remember empty content")
@@ -124,12 +137,16 @@ class MemorySystem:
 
         superseded: list[MemoryRecord] = []
         if subject_key:
-            for existing in await self.db.memories.find_by_subject(subject_key, kind):
+            for existing in await self.db.memories.find_by_subject(
+                subject_key, kind, user_id=user_id
+            ):
                 if existing.content.strip() == content:
                     return await self._reinforce(existing, importance, now)
                 superseded.append(existing)
         elif dedupe:
-            for hit in await self.vectors.search(vector, k=3, kinds=[kind.value]):
+            for hit in await self.vectors.search(
+                vector, k=3, kinds=[kind.value], scopes=[scope_key(user_id)]
+            ):
                 if hit.score < self.config.dedupe_similarity:
                     break
                 candidate = await self.db.memories.get(hit.id)
@@ -139,6 +156,7 @@ class MemorySystem:
         record = MemoryRecord(
             kind=kind,
             content=content,
+            user_id=user_id,
             subject_key=subject_key,
             metadata=metadata or {},
             importance=importance,
@@ -150,7 +168,7 @@ class MemorySystem:
             last_accessed_at=now,
         )
         await self.db.memories.insert(record)
-        await self.vectors.upsert([VectorItem(record.id, vector, kind.value)])
+        await self.vectors.upsert([_item(record, vector)])
         if superseded:
             ids = [r.id for r in superseded]
             await self.db.memories.set_status(ids, MemoryStatus.SUPERSEDED, superseded_by=record.id)
@@ -174,9 +192,7 @@ class MemorySystem:
             for record in batch:
                 record.embedding_model = self.embedder.model_id
             await self.db.memories.insert_many(batch)
-            await self.vectors.upsert(
-                [VectorItem(r.id, v, r.kind.value) for r, v in zip(batch, vectors, strict=True)]
-            )
+            await self.vectors.upsert([_item(r, v) for r, v in zip(batch, vectors, strict=True)])
             for record in batch:
                 self._count("store", record.kind)
         await self.vectors.flush()
@@ -220,7 +236,10 @@ class MemorySystem:
         k: int | None = None,
         min_similarity: float | None = None,
         touch: bool = True,
+        scope: Scope = Scope(),
     ) -> list[ScoredMemory]:
+        """Hybrid recall limited to ``scope`` (default: shared memories only)."""
+
         if not query.strip():
             return []
         k = k or self.config.recall_k
@@ -229,9 +248,15 @@ class MemorySystem:
         kind_values = [x.value for x in kind_list] if kind_list is not None else None
 
         qvec = await self._embed_query(query)
-        dense = {h.id: h.score for h in await self.vectors.search(qvec, k=k * 4, kinds=kind_values)}
+        hits = await self.vectors.search(
+            qvec, k=k * 4, kinds=kind_values, scopes=scope.vector_scopes()
+        )
+        dense = {h.id: h.score for h in hits}
         lexical = {
-            r.id: s for r, s in await self.db.memories.search_text(query, kind_list, limit=k * 2)
+            r.id: s
+            for r, s in await self.db.memories.search_text(
+                query, kind_list, limit=k * 2, scope=scope
+            )
         }
         records = await self.db.memories.get_many(list(dense.keys() | lexical.keys()))
 
@@ -239,7 +264,8 @@ class MemorySystem:
         c = self.config
         scored: list[ScoredMemory] = []
         for id_, record in records.items():
-            if record.status is not MemoryStatus.ACTIVE:
+            # Defence in depth: the indexes already filter, but never trust them alone.
+            if record.status is not MemoryStatus.ACTIVE or not scope.allows(record.user_id):
                 continue
             dense_sim = max(0.0, dense.get(id_, 0.0))
             lex = lexical.get(id_, 0.0)
@@ -271,14 +297,15 @@ class MemorySystem:
         *,
         since: datetime | None = None,
         limit: int = 20,
+        scope: Scope = Scope(),
     ) -> list[MemoryRecord]:
         """Chronological episodic access (newest first)."""
 
-        return await self.db.memories.list(kinds=kinds, since=since, limit=limit)
+        return await self.db.memories.list(kinds=kinds, since=since, limit=limit, scope=scope)
 
     # ----------------------------------------------------------- episodic
     async def record_episode(
-        self, episode: Episode, *, importance: float | None = None
+        self, episode: Episode, *, importance: float | None = None, user_id: str | None = None
     ) -> MemoryRecord:
         if importance is None:
             importance = 0.7 if episode.outcome in ("failure", "aborted") else 0.5
@@ -290,6 +317,7 @@ class MemorySystem:
             metadata={"episode": episode.model_dump(mode="json")},
             source=episode.source,
             dedupe=False,
+            user_id=user_id,
         )
 
     # --------------------------------------------------------- procedural
@@ -336,7 +364,19 @@ class MemorySystem:
         await self.learn_procedure(proc.model_copy(update={"source_tasks": []}), success=success)
 
     async def find_procedures(self, query: str, k: int = 3) -> list[ScoredMemory]:
+        """Procedures are Fuzzy's own skills, always shared."""
+
         return await self.recall(query, kinds=[MemoryKind.PROCEDURE], k=k, min_similarity=0.3)
+
+    async def forget_user(self, user_id: str) -> int:
+        """Erase every private memory about a person (account deletion)."""
+
+        ids = await self.db.memories.ids_for_user(user_id)
+        await self.vectors.delete(ids)
+        await self.db.memories.purge(ids)
+        await self.vectors.flush()
+        await self._emit("memory.user_erased", user_id=user_id, count=len(ids))
+        return len(ids)
 
     # ------------------------------------------------------------ working
     async def add_turn(self, session_id: str, role: str, content: str, **metadata: Any) -> int:
@@ -362,7 +402,9 @@ class MemorySystem:
         now = self.clock.now()
         offset = 0
         while True:
-            page = await self.db.memories.list(limit=batch, offset=offset, newest_first=False)
+            page = await self.db.memories.list(
+                limit=batch, offset=offset, newest_first=False, scope=Scope.system()
+            )
             if not page:
                 break
             offset += len(page)
@@ -392,7 +434,9 @@ class MemorySystem:
         total = 0
         offset = 0
         while True:
-            page = await self.db.memories.list(limit=batch, offset=offset, newest_first=False)
+            page = await self.db.memories.list(
+                limit=batch, offset=offset, newest_first=False, scope=Scope.system()
+            )
             if not page:
                 break
             offset += len(page)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any
@@ -32,6 +33,52 @@ class MemoryKind(StrEnum):
     SUMMARY = "summary"
     REFLECTION = "reflection"
     THOUGHT = "thought"
+    CONVERSATION = "conversation"
+
+
+GLOBAL_SCOPE = "global"
+
+
+def scope_key(user_id: str | None) -> str:
+    """Vector-index scope label for a memory owned by ``user_id`` (or shared)."""
+
+    return f"u:{user_id}" if user_id else GLOBAL_SCOPE
+
+
+@dataclass(frozen=True)
+class Scope:
+    """Which memories a query may see.
+
+    The default is *shared memories only*: a call site that forgets to pass a scope
+    misses private memories instead of leaking one person's memories to another.
+    """
+
+    user_id: str | None = None
+    include_global: bool = True
+    everything: bool = False
+
+    @classmethod
+    def system(cls) -> Scope:
+        return cls(everything=True)
+
+    @classmethod
+    def for_user(cls, user_id: str | None) -> Scope:
+        return cls(user_id=user_id)
+
+    def vector_scopes(self) -> list[str] | None:
+        if self.everything:
+            return None
+        scopes = [GLOBAL_SCOPE] if self.include_global else []
+        if self.user_id:
+            scopes.append(scope_key(self.user_id))
+        return scopes
+
+    def allows(self, user_id: str | None) -> bool:
+        if self.everything:
+            return True
+        if user_id is None:
+            return self.include_global
+        return user_id == self.user_id
 
 
 class MemoryStatus(StrEnum):
@@ -45,6 +92,7 @@ class MemoryRecord(_Record):
     id: str = Field(default_factory=lambda: new_id("mem"))
     kind: MemoryKind
     content: str
+    user_id: str | None = None  # owner of a private memory; None = shared/self
     subject_key: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -103,6 +151,7 @@ class TaskRecord(_Record):
     status: TaskStatus = TaskStatus.PENDING
     priority: int = 5
     session_id: str | None = None
+    user_id: str | None = None
     parent_id: str | None = None
     goal_id: str | None = None
     attempts: int = 0
@@ -232,7 +281,166 @@ class DocumentRecord(_Record):
 class ConversationMessage(_Record):
     id: str = Field(default_factory=lambda: new_id("msg"))
     session_id: str
+    user_id: str | None = None
     role: str
     content: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)
+
+
+# ------------------------------------------------------------------- accounts
+class UserRole(StrEnum):
+    ADMIN = "admin"
+    USER = "user"
+
+
+class UserStatus(StrEnum):
+    ACTIVE = "active"
+    PENDING = "pending"
+    DISABLED = "disabled"
+
+
+class UserRecord(_Record):
+    id: str = Field(default_factory=lambda: new_id("usr"))
+    username: str
+    username_key: str  # case-folded, unique
+    display_name: str
+    password_hash: str
+    role: UserRole = UserRole.USER
+    status: UserStatus = UserStatus.ACTIVE
+    can_teach: bool = False
+    totp_secret: str | None = None
+    totp_last_step: int = 0
+    failed_logins: int = 0
+    locked_until: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    last_login_at: datetime | None = None
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "username": self.username,
+            "display_name": self.display_name,
+            "role": self.role.value,
+            "can_teach": self.can_teach or self.role is UserRole.ADMIN,
+            "totp_enabled": self.totp_secret is not None,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+class SessionRecord(_Record):
+    id: str  # SHA-256 of the session token; the token itself is never stored
+    user_id: str
+    csrf_token: str
+    mfa_pending: bool = False
+    ip: str | None = None
+    user_agent: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    last_seen_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+
+
+class InviteRecord(_Record):
+    id: str  # SHA-256 of the invite code
+    created_by: str
+    role: UserRole = UserRole.USER
+    can_teach: bool = False
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    used_by: str | None = None
+    used_at: datetime | None = None
+
+
+class UsageRecord(_Record):
+    user_id: str
+    day: str  # YYYY-MM-DD (UTC)
+    messages: int = 0
+    images: int = 0
+    teach_bytes: int = 0
+
+
+# --------------------------------------------------------------- social mind
+class RelationshipRecord(_Record):
+    """How Fuzzy sees one person. Numbers and words are Fuzzy's own appraisals."""
+
+    user_id: str
+    familiarity: float = Field(default=0.0, ge=0.0, le=1.0)
+    affinity: float = Field(default=0.0, ge=-1.0, le=1.0)
+    trust: float = Field(default=0.3, ge=0.0, le=1.0)
+    opinion: str = ""
+    feelings: str = ""
+    nickname: str | None = None
+    interactions: int = 0
+    first_met_at: datetime = Field(default_factory=utcnow)
+    last_seen_at: datetime = Field(default_factory=utcnow)
+    last_reflected_at: datetime | None = None
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class BeliefStatus(StrEnum):
+    ACTIVE = "active"
+    REVISED = "revised"
+
+
+class SelfBeliefRecord(_Record):
+    """Something Fuzzy has decided about itself (identity, tastes, values...)."""
+
+    id: str = Field(default_factory=lambda: new_id("blf"))
+    aspect: str  # normalized key, e.g. "gender", "favourite_colour"
+    value: str
+    reasoning: str
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    status: BeliefStatus = BeliefStatus.ACTIVE
+    supersedes: str | None = None
+    formed_at: datetime = Field(default_factory=utcnow)
+    revised_at: datetime | None = None
+    source: str = "self"
+
+
+class EmotionEvent(_Record):
+    id: str = Field(default_factory=lambda: new_id("emo"))
+    emotion: str
+    intensity: float = Field(ge=0.0, le=1.0)
+    cause: str
+    user_id: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class NoteRecord(_Record):
+    """A message Fuzzy decided to leave for someone."""
+
+    id: str = Field(default_factory=lambda: new_id("note"))
+    user_id: str
+    content: str
+    created_at: datetime = Field(default_factory=utcnow)
+    read_at: datetime | None = None
+
+
+class MediaRecord(_Record):
+    id: str = Field(default_factory=lambda: new_id("img"))
+    kind: str = "image"
+    prompt: str
+    path: str
+    mime: str = "image/png"
+    width: int = 0
+    height: int = 0
+    user_id: str | None = None  # requested by (private to) this user; None = Fuzzy's own
+    public: bool = False
+    caption: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class WorldObject(_Record):
+    """Something in Fuzzy's world, built from simple parts."""
+
+    id: str = Field(default_factory=lambda: new_id("obj"))
+    name: str
+    description: str = ""
+    parts: list[dict[str, Any]] = Field(default_factory=list)
+    x: float = 0.0
+    z: float = 0.0
+    rotation: float = 0.0
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)

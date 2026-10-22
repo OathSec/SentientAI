@@ -29,6 +29,7 @@ class ToolArgs(BaseModel):
 class ToolContext:
     task_id: str | None = None
     session_id: str | None = None
+    user_id: str | None = None  # the person this work is for (their memory compartment)
     autonomous: bool = False
     scratch_dir: Path | None = None
     extras: dict[str, Any] = field(default_factory=dict)

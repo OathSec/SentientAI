@@ -30,6 +30,7 @@ from sentientai.storage.records import (
     GoalOrigin,
     MemoryKind,
     ProposalStatus,
+    Scope,
     TaskSource,
     TaskStatus,
 )
@@ -208,7 +209,7 @@ def create_app(runtime: Runtime) -> FastAPI:
         kinds: list[MemoryKind] | None = Query(None),
         k: int = Query(8, ge=1, le=50),
     ) -> list[dict[str, Any]]:
-        hits = await c.memory.recall(q, kinds=kinds, k=k, touch=False)
+        hits = await c.memory.recall(q, kinds=kinds, k=k, touch=False, scope=Scope.system())
         return [
             {
                 "score": round(h.score, 4),

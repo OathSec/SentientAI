@@ -11,7 +11,20 @@ from datetime import datetime
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
-from sqlalchemy import Table, and_, delete, event, func, or_, select, update
+from sqlalchemy import (
+    Table,
+    and_,
+    delete,
+    event,
+    false,
+    func,
+    inspect,
+    or_,
+    select,
+    text,
+    true,
+    update,
+)
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -22,19 +35,31 @@ from sentientai.storage import schema
 from sentientai.storage.records import (
     ApprovalRecord,
     ApprovalStatus,
+    BeliefStatus,
     ConversationMessage,
     DocumentRecord,
+    EmotionEvent,
     GoalRecord,
     GoalStatus,
+    InviteRecord,
+    MediaRecord,
     MemoryKind,
     MemoryRecord,
     MemoryStatus,
+    NoteRecord,
     ProposalRecord,
     ProposalStatus,
+    RelationshipRecord,
+    Scope,
+    SelfBeliefRecord,
+    SessionRecord,
     TaskRecord,
     TaskStatus,
     ToolInvocationRecord,
     ToolStats,
+    UsageRecord,
+    UserRecord,
+    WorldObject,
 )
 
 R = TypeVar("R", bound=BaseModel)
@@ -92,6 +117,19 @@ class _Repository(Generic[R]):
         return [self._from_row(r) for r in rows]
 
 
+def _scope_clause(column: Any, scope: Scope) -> Any:
+    """SQL filter implementing :class:`Scope` (shared and/or one person's private memories)."""
+
+    if scope.everything:
+        return true()
+    clauses = []
+    if scope.include_global:
+        clauses.append(column.is_(None))
+    if scope.user_id:
+        clauses.append(column == scope.user_id)
+    return or_(*clauses) if clauses else false()
+
+
 class MemoryRepository(_Repository[MemoryRecord]):
     table = schema.memories
     model = MemoryRecord
@@ -110,9 +148,10 @@ class MemoryRepository(_Repository[MemoryRecord]):
         limit: int = 100,
         offset: int = 0,
         newest_first: bool = True,
+        scope: Scope = Scope(),
     ) -> builtins.list[MemoryRecord]:
         t = self.table
-        stmt = select(t)
+        stmt = select(t).where(_scope_clause(t.c.user_id, scope))
         if kinds is not None:
             stmt = stmt.where(t.c.kind.in_([k.value for k in kinds]))
         if status is not None:
@@ -123,18 +162,26 @@ class MemoryRepository(_Repository[MemoryRecord]):
         return await self._select(stmt.order_by(order, t.c.id).limit(limit).offset(offset))
 
     async def find_by_subject(
-        self, subject_key: str, kind: MemoryKind | None = None
+        self, subject_key: str, kind: MemoryKind | None = None, *, user_id: str | None = None
     ) -> builtins.list[MemoryRecord]:
+        """Active memories about ``subject_key`` owned by exactly ``user_id`` (None = shared)."""
+
         t = self.table
+        owner = t.c.user_id.is_(None) if user_id is None else t.c.user_id == user_id
         stmt = select(t).where(
-            and_(t.c.subject_key == subject_key, t.c.status == MemoryStatus.ACTIVE.value)
+            and_(t.c.subject_key == subject_key, t.c.status == MemoryStatus.ACTIVE.value, owner)
         )
         if kind is not None:
             stmt = stmt.where(t.c.kind == kind.value)
         return await self._select(stmt.order_by(t.c.updated_at.desc()))
 
     async def search_text(
-        self, query: str, kinds: Iterable[MemoryKind] | None = None, limit: int = 50
+        self,
+        query: str,
+        kinds: Iterable[MemoryKind] | None = None,
+        limit: int = 50,
+        *,
+        scope: Scope = Scope(),
     ) -> builtins.list[tuple[MemoryRecord, float]]:
         """Keyword search used to complement dense retrieval (hybrid recall)."""
 
@@ -145,7 +192,9 @@ class MemoryRepository(_Repository[MemoryRecord]):
         content = func.lower(t.c.content)
         stmt = select(t).where(
             and_(
-                t.c.status == MemoryStatus.ACTIVE.value, or_(*[content.contains(x) for x in terms])
+                t.c.status == MemoryStatus.ACTIVE.value,
+                _scope_clause(t.c.user_id, scope),
+                or_(*[content.contains(x) for x in terms]),
             )
         )
         if kinds is not None:
@@ -197,9 +246,15 @@ class MemoryRepository(_Repository[MemoryRecord]):
             for id_, strength in strengths.items():
                 await conn.execute(update(t).where(t.c.id == id_).values(strength=strength))
 
-    async def count_by_kind(self, status: MemoryStatus = MemoryStatus.ACTIVE) -> dict[str, int]:
+    async def count_by_kind(
+        self, status: MemoryStatus = MemoryStatus.ACTIVE, *, scope: Scope = Scope.system()
+    ) -> dict[str, int]:
         t = self.table
-        stmt = select(t.c.kind, func.count()).where(t.c.status == status.value).group_by(t.c.kind)
+        stmt = (
+            select(t.c.kind, func.count())
+            .where(and_(t.c.status == status.value, _scope_clause(t.c.user_id, scope)))
+            .group_by(t.c.kind)
+        )
         async with self.engine.connect() as conn:
             rows = (await conn.execute(stmt)).fetchall()
         return {str(kind): int(count) for kind, count in rows}
@@ -210,6 +265,12 @@ class MemoryRepository(_Repository[MemoryRecord]):
         async with self.engine.begin() as conn:
             result = await conn.execute(delete(self.table).where(self.table.c.id.in_(list(ids))))
         return int(result.rowcount)
+
+    async def ids_for_user(self, user_id: str) -> builtins.list[str]:
+        t = self.table
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(t.c.id).where(t.c.user_id == user_id))).fetchall()
+        return [str(r[0]) for r in rows]
 
 
 class TaskRepository(_Repository[TaskRecord]):
@@ -530,6 +591,292 @@ class StateRepository:
             await conn.execute(delete(schema.kv_state).where(schema.kv_state.c.key == key))
 
 
+# --------------------------------------------------------------------- people
+class UserRepository(_Repository[UserRecord]):
+    table = schema.users
+    model = UserRecord
+
+    async def by_username(self, username: str) -> UserRecord | None:
+        t = self.table
+        records = await self._select(
+            select(t).where(t.c.username_key == username.strip().casefold())
+        )
+        return records[0] if records else None
+
+    async def list(self, limit: int = 500) -> builtins.list[UserRecord]:
+        t = self.table
+        return await self._select(select(t).order_by(t.c.created_at.asc()).limit(limit))
+
+    async def count(self) -> int:
+        async with self.engine.connect() as conn:
+            return int(
+                (await conn.execute(select(func.count()).select_from(self.table))).scalar_one()
+            )
+
+    async def delete(self, id_: str) -> None:
+        await _delete_where(self.engine, self.table.c.id, id_)
+
+
+class SessionRepository(_Repository[SessionRecord]):
+    table = schema.sessions
+    model = SessionRecord
+
+    async def touch(self, id_: str, when: datetime, expires_at: datetime) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(self.table)
+                .where(self.table.c.id == id_)
+                .values(last_seen_at=when, expires_at=expires_at)
+            )
+
+    async def delete(self, id_: str) -> None:
+        await _delete_where(self.engine, self.table.c.id, id_)
+
+    async def delete_for_user(self, user_id: str, *, keep: str | None = None) -> int:
+        t = self.table
+        condition = t.c.user_id == user_id
+        if keep is not None:
+            condition = and_(condition, t.c.id != keep)
+        async with self.engine.begin() as conn:
+            result = await conn.execute(delete(t).where(condition))
+        return int(result.rowcount)
+
+    async def purge_expired(self, now: datetime) -> int:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(delete(self.table).where(self.table.c.expires_at < now))
+        return int(result.rowcount)
+
+
+class InviteRepository(_Repository[InviteRecord]):
+    table = schema.invites
+    model = InviteRecord
+
+    async def consume(self, id_: str, user_id: str, now: datetime) -> bool:
+        """Atomically mark an unused, unexpired invite as used."""
+
+        t = self.table
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(t)
+                .where(and_(t.c.id == id_, t.c.used_by.is_(None), t.c.expires_at > now))
+                .values(used_by=user_id, used_at=now)
+            )
+        return bool(result.rowcount == 1)
+
+    async def list(self, limit: int = 100) -> builtins.list[InviteRecord]:
+        t = self.table
+        return await self._select(select(t).order_by(t.c.created_at.desc()).limit(limit))
+
+
+class UsageRepository:
+    """Per-user daily usage counters (quotas for a shared GPU box)."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self.engine = engine
+
+    async def get(self, user_id: str, day: str) -> UsageRecord:
+        t = schema.usage
+        async with self.engine.connect() as conn:
+            row = (
+                await conn.execute(select(t).where(and_(t.c.user_id == user_id, t.c.day == day)))
+            ).first()
+        return (
+            UsageRecord.model_validate(_row_dict(row))
+            if row
+            else UsageRecord(user_id=user_id, day=day)
+        )
+
+    async def add(
+        self, user_id: str, day: str, *, messages: int = 0, images: int = 0, teach_bytes: int = 0
+    ) -> UsageRecord:
+        t = schema.usage
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(t)
+                .where(and_(t.c.user_id == user_id, t.c.day == day))
+                .values(
+                    messages=t.c.messages + messages,
+                    images=t.c.images + images,
+                    teach_bytes=t.c.teach_bytes + teach_bytes,
+                )
+            )
+            if result.rowcount == 0:
+                await conn.execute(
+                    t.insert().values(
+                        user_id=user_id,
+                        day=day,
+                        messages=messages,
+                        images=images,
+                        teach_bytes=teach_bytes,
+                    )
+                )
+        return await self.get(user_id, day)
+
+    async def delete_user(self, user_id: str) -> None:
+        await _delete_where(self.engine, schema.usage.c.user_id, user_id)
+
+
+# ---------------------------------------------------------------- social mind
+class RelationshipRepository:
+    def __init__(self, engine: AsyncEngine) -> None:
+        self.engine = engine
+
+    async def get(self, user_id: str) -> RelationshipRecord | None:
+        t = schema.relationships
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(t).where(t.c.user_id == user_id))).first()
+        return RelationshipRecord.model_validate(_row_dict(row)) if row else None
+
+    async def upsert(self, record: RelationshipRecord) -> RelationshipRecord:
+        t = schema.relationships
+        values = record.model_dump(mode="python")
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(t).where(t.c.user_id == record.user_id).values(**values)
+            )
+            if result.rowcount == 0:
+                await conn.execute(t.insert().values(**values))
+        return record
+
+    async def list(self, limit: int = 500) -> builtins.list[RelationshipRecord]:
+        t = schema.relationships
+        async with self.engine.connect() as conn:
+            rows = (
+                await conn.execute(select(t).order_by(t.c.last_seen_at.desc()).limit(limit))
+            ).fetchall()
+        return [RelationshipRecord.model_validate(_row_dict(r)) for r in rows]
+
+    async def delete(self, user_id: str) -> None:
+        await _delete_where(self.engine, schema.relationships.c.user_id, user_id)
+
+
+class SelfBeliefRepository(_Repository[SelfBeliefRecord]):
+    table = schema.self_beliefs
+    model = SelfBeliefRecord
+
+    async def active(self, aspect: str | None = None) -> builtins.list[SelfBeliefRecord]:
+        t = self.table
+        stmt = select(t).where(t.c.status == BeliefStatus.ACTIVE.value)
+        if aspect is not None:
+            stmt = stmt.where(t.c.aspect == aspect)
+        return await self._select(stmt.order_by(t.c.formed_at.asc()))
+
+    async def history(self, aspect: str) -> builtins.list[SelfBeliefRecord]:
+        t = self.table
+        return await self._select(
+            select(t).where(t.c.aspect == aspect).order_by(t.c.formed_at.asc())
+        )
+
+    async def replace(
+        self, old_id: str | None, new: SelfBeliefRecord, when: datetime
+    ) -> SelfBeliefRecord:
+        """Retire the current belief (if any) and record the new one atomically."""
+
+        t = self.table
+        async with self.engine.begin() as conn:
+            if old_id is not None:
+                await conn.execute(
+                    update(t)
+                    .where(and_(t.c.id == old_id, t.c.status == BeliefStatus.ACTIVE.value))
+                    .values(status=BeliefStatus.REVISED.value, revised_at=when)
+                )
+            await conn.execute(t.insert().values(**new.model_dump(mode="python")))
+        return new
+
+
+class EmotionRepository(_Repository[EmotionEvent]):
+    table = schema.emotion_events
+    model = EmotionEvent
+
+    async def recent(
+        self, limit: int = 50, since: datetime | None = None
+    ) -> builtins.list[EmotionEvent]:
+        t = self.table
+        stmt = select(t)
+        if since is not None:
+            stmt = stmt.where(t.c.created_at >= since)
+        return await self._select(stmt.order_by(t.c.created_at.desc()).limit(limit))
+
+    async def delete_user(self, user_id: str) -> None:
+        await _delete_where(self.engine, self.table.c.user_id, user_id)
+
+
+class NoteRepository(_Repository[NoteRecord]):
+    table = schema.notes
+    model = NoteRecord
+
+    async def for_user(
+        self, user_id: str, *, unread_only: bool = False
+    ) -> builtins.list[NoteRecord]:
+        t = self.table
+        stmt = select(t).where(t.c.user_id == user_id)
+        if unread_only:
+            stmt = stmt.where(t.c.read_at.is_(None))
+        return await self._select(stmt.order_by(t.c.created_at.desc()).limit(200))
+
+    async def mark_read(self, user_id: str, when: datetime) -> None:
+        t = self.table
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(t)
+                .where(and_(t.c.user_id == user_id, t.c.read_at.is_(None)))
+                .values(read_at=when)
+            )
+
+    async def delete_user(self, user_id: str) -> None:
+        await _delete_where(self.engine, self.table.c.user_id, user_id)
+
+
+class MediaRepository(_Repository[MediaRecord]):
+    table = schema.media
+    model = MediaRecord
+
+    async def visible_to(
+        self, user_id: str | None, *, admin: bool = False, limit: int = 100
+    ) -> builtins.list[MediaRecord]:
+        """Fuzzy's own images and public ones, plus the viewer's private requests."""
+
+        t = self.table
+        stmt = select(t)
+        if not admin:
+            allowed = or_(t.c.public.is_(True), t.c.user_id.is_(None))
+            if user_id:
+                allowed = or_(allowed, t.c.user_id == user_id)
+            stmt = stmt.where(allowed)
+        return await self._select(stmt.order_by(t.c.created_at.desc()).limit(limit))
+
+    async def for_user(self, user_id: str) -> builtins.list[MediaRecord]:
+        t = self.table
+        return await self._select(select(t).where(t.c.user_id == user_id))
+
+    async def delete(self, id_: str) -> None:
+        await _delete_where(self.engine, self.table.c.id, id_)
+
+
+class WorldRepository(_Repository[WorldObject]):
+    table = schema.world_objects
+    model = WorldObject
+
+    async def all(self) -> builtins.list[WorldObject]:
+        t = self.table
+        return await self._select(select(t).order_by(t.c.created_at.asc()))
+
+    async def delete(self, id_: str) -> None:
+        await _delete_where(self.engine, self.table.c.id, id_)
+
+    async def count(self) -> int:
+        async with self.engine.connect() as conn:
+            return int(
+                (await conn.execute(select(func.count()).select_from(self.table))).scalar_one()
+            )
+
+
+async def _delete_where(engine: AsyncEngine, column: Any, value: Any) -> int:
+    async with engine.begin() as conn:
+        result = await conn.execute(delete(column.table).where(column == value))
+    return int(result.rowcount)
+
+
 class Database:
     """Owns the engine and exposes repositories. Works on PostgreSQL and SQLite."""
 
@@ -552,12 +899,24 @@ class Database:
         self.documents = DocumentRepository(self.engine)
         self.conversations = ConversationRepository(self.engine)
         self.state = StateRepository(self.engine)
+        self.users = UserRepository(self.engine)
+        self.sessions = SessionRepository(self.engine)
+        self.invites = InviteRepository(self.engine)
+        self.usage = UsageRepository(self.engine)
+        self.relationships = RelationshipRepository(self.engine)
+        self.self_beliefs = SelfBeliefRepository(self.engine)
+        self.emotions = EmotionRepository(self.engine)
+        self.notes = NoteRepository(self.engine)
+        self.media = MediaRepository(self.engine)
+        self.world = WorldRepository(self.engine)
 
     @property
     def dialect(self) -> str:
         return str(self.engine.dialect.name)
 
     async def create_all(self) -> None:
+        """Create missing tables and upgrade older schemas in place."""
+
         async with self.engine.begin() as conn:
             await conn.run_sync(schema.metadata.create_all)
             row = (
@@ -571,9 +930,26 @@ class Database:
                         key="version", value=str(schema.SCHEMA_VERSION)
                     )
                 )
-            elif int(row[0]) > schema.SCHEMA_VERSION:
+                return
+            current = int(row[0])
+            if current > schema.SCHEMA_VERSION:
                 raise StorageError(
-                    f"database schema v{row[0]} is newer than this build (v{schema.SCHEMA_VERSION})"
+                    f"database schema v{current} is newer than this build "
+                    f"(v{schema.SCHEMA_VERSION})"
+                )
+            for version in range(current + 1, schema.SCHEMA_VERSION + 1):
+                for table, column, ddl in schema.ADDED_COLUMNS.get(version, []):
+                    existing = await conn.run_sync(_column_names, table)
+                    if column not in existing:
+                        await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+            if current < schema.SCHEMA_VERSION:
+                await conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_memories_user ON memories (user_id)")
+                )
+                await conn.execute(
+                    update(schema.schema_meta)
+                    .where(schema.schema_meta.c.key == "version")
+                    .values(value=str(schema.SCHEMA_VERSION))
                 )
 
     async def ping(self) -> bool:
@@ -586,6 +962,10 @@ class Database:
 
     async def close(self) -> None:
         await self.engine.dispose()
+
+
+def _column_names(sync_conn: Any, table: str) -> set[str]:
+    return {str(c["name"]) for c in inspect(sync_conn).get_columns(table)}
 
 
 def _sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:

@@ -100,9 +100,11 @@ class MemoryConsolidator:
         ).strip()
         if not summary:
             return False
+        owner = next((t.metadata.get("user_id") for t in turns if t.metadata.get("user_id")), None)
         await self.memory.remember(
             summary,
             MemoryKind.SUMMARY,
+            user_id=owner,
             importance=0.4,
             metadata={"session_id": session_id, "turns": len(older)},
             source="consolidation",
@@ -114,7 +116,9 @@ class MemoryConsolidator:
         )
         return True
 
-    async def extract_facts(self, text: str, *, source: str) -> tuple[list[MemoryRecord], int]:
+    async def extract_facts(
+        self, text: str, *, source: str, user_id: str | None = None
+    ) -> tuple[list[MemoryRecord], int]:
         raw = await self._complete(
             prompts.EXTRACT_FACTS.format(text=text[-12000:]), TaskKind.EXTRACT, json_mode=True
         )
@@ -140,6 +144,7 @@ class MemoryConsolidator:
                     confidence=confidence,
                     subject_key=subject_key,
                     source=source,
+                    user_id=user_id,
                 )
             )
         return stored, rejected
@@ -158,13 +163,14 @@ class MemoryConsolidator:
         last_raw = await state.get(_CHECKPOINT_KEY)
         since = datetime.fromisoformat(last_raw) if last_raw else datetime.fromtimestamp(0, UTC)
         messages = await self.memory.db.conversations.since(since)
-        by_session: dict[str, list[str]] = defaultdict(list)
+        # Facts from a conversation belong to that person's compartment.
+        by_session: dict[tuple[str, str | None], list[str]] = defaultdict(list)
         for msg in messages:
-            by_session[msg.session_id].append(f"{msg.role}: {msg.content}")
-        for session_id, lines in by_session.items():
+            by_session[(msg.session_id, msg.user_id)].append(f"{msg.role}: {msg.content}")
+        for (session_id, owner), lines in by_session.items():
             try:
                 stored, rejected = await self.extract_facts(
-                    "\n".join(lines), source=f"conversation:{session_id}"
+                    "\n".join(lines), source=f"conversation:{session_id}", user_id=owner
                 )
                 report.facts_stored.extend(r.id for r in stored)
                 report.facts_rejected += rejected

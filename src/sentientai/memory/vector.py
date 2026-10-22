@@ -24,6 +24,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from sentientai.errors import ConfigError, StorageError
+from sentientai.storage.records import GLOBAL_SCOPE
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class VectorItem:
     id: str
     vector: list[float]
     kind: str
+    scope: str = GLOBAL_SCOPE  # "global" or "u:<user id>" (private to one person)
 
 
 @dataclass(frozen=True)
@@ -48,7 +50,11 @@ class VectorStore(Protocol):
     async def upsert(self, items: Sequence[VectorItem]) -> None: ...
 
     async def search(
-        self, vector: list[float], k: int, kinds: Sequence[str] | None = None
+        self,
+        vector: list[float],
+        k: int,
+        kinds: Sequence[str] | None = None,
+        scopes: Sequence[str] | None = None,
     ) -> list[VectorHit]: ...
 
     async def delete(self, ids: Sequence[str]) -> None: ...
@@ -66,6 +72,7 @@ class InMemoryVectorStore:
         self.path = path
         self._ids: list[str] = []
         self._kinds: list[str] = []
+        self._scopes: list[str] = []
         self._index: dict[str, int] = {}
         self._matrix = np.zeros((0, dimensions), dtype=np.float32)
         self._dirty = False
@@ -83,6 +90,11 @@ class InMemoryVectorStore:
             )
         self._ids = [str(x) for x in data["ids"]]
         self._kinds = [str(x) for x in data["kinds"]]
+        self._scopes = (
+            [str(x) for x in data["scopes"]]
+            if "scopes" in data.files
+            else [GLOBAL_SCOPE] * len(self._ids)  # index written before scoping existed
+        )
         self._matrix = matrix.reshape(len(self._ids), self.dimensions)
         self._index = {id_: i for i, id_ in enumerate(self._ids)}
 
@@ -99,17 +111,23 @@ class InMemoryVectorStore:
                     i = self._index[item.id]
                     self._matrix[i] = vec
                     self._kinds[i] = item.kind
+                    self._scopes[i] = item.scope
                 else:
                     self._index[item.id] = len(self._ids) + len(new_rows)
                     new_rows.append(vec)
                     self._ids.append(item.id)
                     self._kinds.append(item.kind)
+                    self._scopes.append(item.scope)
             if new_rows:
                 self._matrix = np.vstack([self._matrix, np.stack(new_rows)])
             self._dirty = True
 
     async def search(
-        self, vector: list[float], k: int, kinds: Sequence[str] | None = None
+        self,
+        vector: list[float],
+        k: int,
+        kinds: Sequence[str] | None = None,
+        scopes: Sequence[str] | None = None,
     ) -> list[VectorHit]:
         if not self._ids or k <= 0:
             return []
@@ -119,6 +137,12 @@ class InMemoryVectorStore:
             allowed = set(kinds)
             mask = np.fromiter(
                 (kind in allowed for kind in self._kinds), dtype=bool, count=len(self._kinds)
+            )
+            scores = np.where(mask, scores, -np.inf)
+        if scopes is not None:
+            visible = set(scopes)
+            mask = np.fromiter(
+                (scope in visible for scope in self._scopes), dtype=bool, count=len(self._scopes)
             )
             scores = np.where(mask, scores, -np.inf)
         k = min(k, len(self._ids))
@@ -135,6 +159,7 @@ class InMemoryVectorStore:
             self._matrix = self._matrix[keep]
             self._ids = [self._ids[i] for i in keep]
             self._kinds = [self._kinds[i] for i in keep]
+            self._scopes = [self._scopes[i] for i in keep]
             self._index = {id_: i for i, id_ in enumerate(self._ids)}
             self._dirty = True
 
@@ -152,6 +177,7 @@ class InMemoryVectorStore:
                 matrix=self._matrix,
                 ids=np.array(self._ids, dtype=str),
                 kinds=np.array(self._kinds, dtype=str),
+                scopes=np.array(self._scopes, dtype=str),
             )
             os.replace(tmp, self.path)
             self._dirty = False
@@ -186,8 +212,15 @@ class PgVectorStore:
                 text(
                     f"CREATE TABLE IF NOT EXISTS {self.TABLE} ("
                     "id TEXT PRIMARY KEY, kind TEXT NOT NULL, "
+                    f"scope TEXT NOT NULL DEFAULT '{GLOBAL_SCOPE}', "
                     f"embedding vector({self.dimensions}) NOT NULL, "
                     "updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+                )
+            )
+            await conn.execute(
+                text(
+                    f"ALTER TABLE {self.TABLE} ADD COLUMN IF NOT EXISTS "
+                    f"scope TEXT NOT NULL DEFAULT '{GLOBAL_SCOPE}'"
                 )
             )
             dims = (
@@ -212,39 +245,59 @@ class PgVectorStore:
             await conn.execute(
                 text(f"CREATE INDEX IF NOT EXISTS {self.TABLE}_kind ON {self.TABLE} (kind)")
             )
+            await conn.execute(
+                text(f"CREATE INDEX IF NOT EXISTS {self.TABLE}_scope ON {self.TABLE} (scope)")
+            )
 
     async def upsert(self, items: Sequence[VectorItem]) -> None:
         if not items:
             return
         stmt = text(
-            f"INSERT INTO {self.TABLE} (id, kind, embedding, updated_at) "
-            "VALUES (:id, :kind, CAST(:embedding AS vector), now()) "
-            "ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind, "
+            f"INSERT INTO {self.TABLE} (id, kind, scope, embedding, updated_at) "
+            "VALUES (:id, :kind, :scope, CAST(:embedding AS vector), now()) "
+            "ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind, scope = EXCLUDED.scope, "
             "embedding = EXCLUDED.embedding, updated_at = now()"
         )
         async with self.engine.begin() as conn:
             await conn.execute(
                 stmt,
                 [
-                    {"id": i.id, "kind": i.kind, "embedding": _vector_literal(i.vector)}
+                    {
+                        "id": i.id,
+                        "kind": i.kind,
+                        "scope": i.scope,
+                        "embedding": _vector_literal(i.vector),
+                    }
                     for i in items
                 ],
             )
 
     async def search(
-        self, vector: list[float], k: int, kinds: Sequence[str] | None = None
+        self,
+        vector: list[float],
+        k: int,
+        kinds: Sequence[str] | None = None,
+        scopes: Sequence[str] | None = None,
     ) -> list[VectorHit]:
-        where = "WHERE kind IN :kinds" if kinds is not None else ""
+        if (kinds is not None and not kinds) or (scopes is not None and not scopes):
+            return []
+        conditions = []
+        if kinds is not None:
+            conditions.append("kind IN :kinds")
+        if scopes is not None:
+            conditions.append("scope IN :scopes")
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         stmt = text(
             f"SELECT id, 1 - (embedding <=> CAST(:q AS vector)) AS score FROM {self.TABLE} {where} "
             "ORDER BY embedding <=> CAST(:q AS vector) LIMIT :k"
         )
         params: dict[str, Any] = {"q": _vector_literal(vector), "k": k}
         if kinds is not None:
-            if not kinds:
-                return []
             stmt = stmt.bindparams(bindparam("kinds", expanding=True))
             params["kinds"] = list(kinds)
+        if scopes is not None:
+            stmt = stmt.bindparams(bindparam("scopes", expanding=True))
+            params["scopes"] = list(scopes)
         async with self.engine.connect() as conn:
             rows = (await conn.execute(stmt, params)).fetchall()
         return [VectorHit(str(r[0]), float(r[1])) for r in rows]
@@ -310,9 +363,10 @@ class QdrantVectorStore:
                 ),
             )
             if self._remote:  # payload indexes only exist on a Qdrant server
-                await self.client.create_payload_index(
-                    self.collection, "kind", field_schema=models.PayloadSchemaType.KEYWORD
-                )
+                for field in ("kind", "scope"):
+                    await self.client.create_payload_index(
+                        self.collection, field, field_schema=models.PayloadSchemaType.KEYWORD
+                    )
         else:
             info = await self.client.get_collection(self.collection)
             params = info.config.params.vectors
@@ -332,24 +386,29 @@ class QdrantVectorStore:
             models.PointStruct(
                 id=self._point_id(i.id),
                 vector=list(i.vector),
-                payload={"mid": i.id, "kind": i.kind},
+                payload={"mid": i.id, "kind": i.kind, "scope": i.scope},
             )
             for i in items
         ]
         await self.client.upsert(self.collection, points=points, wait=True)
 
     async def search(
-        self, vector: list[float], k: int, kinds: Sequence[str] | None = None
+        self,
+        vector: list[float],
+        k: int,
+        kinds: Sequence[str] | None = None,
+        scopes: Sequence[str] | None = None,
     ) -> list[VectorHit]:
         from qdrant_client import models
 
-        query_filter = None
+        if (kinds is not None and not kinds) or (scopes is not None and not scopes):
+            return []
+        must: list[Any] = []
         if kinds is not None:
-            if not kinds:
-                return []
-            query_filter = models.Filter(
-                must=[models.FieldCondition(key="kind", match=models.MatchAny(any=list(kinds)))]
-            )
+            must.append(models.FieldCondition(key="kind", match=models.MatchAny(any=list(kinds))))
+        if scopes is not None:
+            must.append(models.FieldCondition(key="scope", match=models.MatchAny(any=list(scopes))))
+        query_filter = models.Filter(must=must) if must else None
         result = await self.client.query_points(
             self.collection,
             query=list(vector),

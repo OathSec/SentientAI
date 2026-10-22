@@ -146,7 +146,8 @@ class MemoryConfig(BaseModel):
     min_relevance: float = Field(default=0.2, ge=0.0, le=1.0)
     dedupe_similarity: float = Field(default=0.93, ge=0.5, le=1.0)
     decay_half_life_days: float = Field(default=30.0, gt=0)
-    prune_strength_threshold: float = Field(default=0.08, ge=0.0, le=1.0)
+    # 0 = never archive: Fuzzy keeps every memory and decay only lowers ranking weight.
+    prune_strength_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
     pin_importance: float = Field(default=0.9, ge=0.0, le=1.0)
     consolidation_interval_s: float = Field(default=1800.0, ge=10)
     summarize_after_turns: int = Field(default=24, ge=4)

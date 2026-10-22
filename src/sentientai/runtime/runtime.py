@@ -29,6 +29,7 @@ from sentientai.runtime.scheduler import Scheduler
 from sentientai.runtime.watchers import FolderWatcher
 from sentientai.storage.records import (
     ConversationMessage,
+    MemoryKind,
     TaskRecord,
     TaskSource,
     TaskStatus,
@@ -224,6 +225,7 @@ class Runtime:
         kind: str = "task",
         goal_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        user_id: str | None = None,
     ) -> TaskRecord:
         if not goal.strip():
             raise ValueError("task goal is empty")
@@ -232,6 +234,7 @@ class Runtime:
             source=source,
             priority=priority,
             session_id=session_id,
+            user_id=user_id,
             kind=kind,
             goal_id=goal_id,
             metadata=metadata or {},
@@ -269,14 +272,28 @@ class Runtime:
         finally:
             self._done.pop(task_id, None)
 
-    async def chat(self, session_id: str, text: str, *, timeout: float | None = None) -> ChatReply:
+    async def chat(
+        self,
+        session_id: str,
+        text: str,
+        *,
+        timeout: float | None = None,
+        user_id: str | None = None,
+        speaker: str | None = None,
+    ) -> ChatReply:
         c = self.c
         c.mind.affect.on_operator_contact()
         await c.db.conversations.insert(
-            ConversationMessage(session_id=session_id, role="user", content=text)
+            ConversationMessage(session_id=session_id, user_id=user_id, role="user", content=text)
         )
         task = await self.submit(
-            text, source=TaskSource.USER, priority=9, session_id=session_id, kind="chat"
+            text,
+            source=TaskSource.USER,
+            priority=9,
+            session_id=session_id,
+            kind="chat",
+            user_id=user_id,
+            metadata={"speaker": speaker} if speaker else None,
         )
         final = await self.wait(task.id, timeout)
         answer = (
@@ -287,13 +304,27 @@ class Runtime:
         await c.db.conversations.insert(
             ConversationMessage(
                 session_id=session_id,
+                user_id=user_id,
                 role="assistant",
                 content=answer,
                 metadata={"task_id": final.id},
             )
         )
-        await c.memory.add_turn(session_id, "user", text)
-        await c.memory.add_turn(session_id, "assistant", answer, task_id=final.id)
+        await c.memory.add_turn(session_id, "user", text, user_id=user_id)
+        await c.memory.add_turn(session_id, "assistant", answer, task_id=final.id, user_id=user_id)
+        if final.status is TaskStatus.SUCCEEDED:
+            # Verbatim, dated record of the exchange so Fuzzy can recall what was actually said.
+            when = (final.finished_at or c.clock.now()).strftime("%Y-%m-%d %H:%M UTC")
+            who = speaker or "Someone"
+            await c.memory.remember(
+                f"On {when}, {who} said: {text[:2000]}\nI replied: {answer[:2000]}",
+                MemoryKind.CONVERSATION,
+                importance=0.45,
+                user_id=user_id,
+                source=f"conversation:{session_id}",
+                dedupe=False,
+                metadata={"task_id": final.id, "session_id": session_id},
+            )
         return ChatReply(
             task=final,
             answer=answer,

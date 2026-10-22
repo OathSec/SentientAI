@@ -27,7 +27,7 @@ from sentientai.config import Settings
 from sentientai.evals.brain import Brain, call
 from sentientai.models.types import LLMClient, Message, ModelTier
 from sentientai.runtime.runtime import Runtime
-from sentientai.storage.records import TaskSource, TaskStatus
+from sentientai.storage.records import Scope, TaskSource, TaskStatus
 
 
 class SeedFact(BaseModel):
@@ -314,7 +314,7 @@ class EvalRunner:
         for rel in c.files_absent:
             add(f"{rel} absent", not (workspace / rel).exists(), "still exists")
         for mem in c.memory_contains:
-            hits = await rt.c.memory.recall(mem.query, k=8, touch=False)
+            hits = await rt.c.memory.recall(mem.query, k=8, touch=False, scope=Scope.system())
             add(
                 f"memory recalls {mem.text!r}",
                 any(mem.text.lower() in h.record.content.lower() for h in hits),

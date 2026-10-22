@@ -93,4 +93,5 @@ KIND_LABELS = {
     MemoryKind.SUMMARY: "conversation summary",
     MemoryKind.REFLECTION: "reflection",
     MemoryKind.THOUGHT: "thought",
+    MemoryKind.CONVERSATION: "past conversation",
 }

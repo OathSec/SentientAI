@@ -38,7 +38,7 @@ from sentientai.orchestration.planner import Planner
 from sentientai.safety.audit import AuditLog
 from sentientai.safety.killswitch import KillSwitch
 from sentientai.safety.limits import LoopGuard
-from sentientai.storage.records import ScoredMemory, TaskRecord, TaskStatus
+from sentientai.storage.records import Scope, ScoredMemory, TaskRecord, TaskStatus
 from sentientai.tools.base import ToolContext, ToolRegistry
 from sentientai.tools.executor import ToolExecutor
 
@@ -204,7 +204,8 @@ class CognitiveAgent:
 
     async def _run(self, task: TaskRecord, guard: LoopGuard, outcome: TaskOutcome) -> None:
         mind = self.mind
-        recalled = await self.memory.recall(task.goal)
+        # A conversation sees shared memories plus this person's compartment, nothing else.
+        recalled = await self.memory.recall(task.goal, scope=Scope.for_user(task.user_id))
         procedures = await self.memory.find_procedures(task.goal)
         outcome.procedures_used = [p.record.id for p in procedures]
         outcome.novelty = self.metacognition.novelty(recalled)
@@ -249,6 +250,7 @@ class CognitiveAgent:
         ctx = ToolContext(
             task_id=task.id,
             session_id=task.session_id,
+            user_id=task.user_id,
             autonomous=task.source.autonomous,
             scratch_dir=self.settings.storage.data_dir / "sandbox" / task.id,
         )

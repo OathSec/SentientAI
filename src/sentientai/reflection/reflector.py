@@ -169,7 +169,8 @@ class Reflector:
             ended_at=self.memory.clock.now(),
         )
         result = ReflectionResult(
-            episode=await self.memory.record_episode(episode),
+            # Experiences with a person are part of that person's compartment.
+            episode=await self.memory.record_episode(episode, user_id=task.user_id),
             lessons=lessons,
             self_assessment=data.self_assessment,
         )
@@ -184,6 +185,7 @@ class Reflector:
                         confidence=fact.confidence,
                         subject_key=key,
                         source=f"reflection:{task.id}",
+                        user_id=task.user_id,
                     )
                 )
         if result.facts:

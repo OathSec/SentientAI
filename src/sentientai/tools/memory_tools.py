@@ -10,7 +10,7 @@ from sentientai.config import RiskLevel
 from sentientai.ingestion.pipeline import IngestionPipeline
 from sentientai.memory.system import MemorySystem
 from sentientai.memory.types import KIND_LABELS
-from sentientai.storage.records import MemoryKind
+from sentientai.storage.records import MemoryKind, Scope
 from sentientai.tools.base import Tool, ToolArgs, ToolContext, ToolResult
 from sentientai.tools.filesystem import Workspace
 
@@ -34,7 +34,9 @@ class MemoryRecall(Tool[RecallArgs]):
 
     async def run(self, args: RecallArgs, ctx: ToolContext) -> ToolResult:
         kinds = [MemoryKind(k) for k in args.kinds] if args.kinds else None
-        hits = await self.memory.recall(args.query, kinds=kinds, k=args.k)
+        hits = await self.memory.recall(
+            args.query, kinds=kinds, k=args.k, scope=Scope.for_user(ctx.user_id)
+        )
         if not hits:
             return ToolResult.success("nothing relevant in memory")
         lines = [
@@ -72,6 +74,7 @@ class MemoryRemember(Tool[RememberArgs]):
             importance=args.importance,
             subject_key=args.subject_key,
             source=f"task:{ctx.task_id}" if ctx.task_id else "agent",
+            user_id=ctx.user_id,  # what someone tells Fuzzy stays in their compartment
         )
         return ToolResult.success(f"remembered as {record.id}")
 
@@ -92,9 +95,13 @@ class MemoryForget(Tool[ForgetArgs]):
         self.memory = memory
 
     async def run(self, args: ForgetArgs, ctx: ToolContext) -> ToolResult:
-        if await self.memory.forget(args.memory_id):
-            return ToolResult.success(f"forgot {args.memory_id}")
-        return ToolResult.failure(f"no memory {args.memory_id}")
+        record = await self.memory.get(args.memory_id)
+        # Only the current compartment: a conversation can't retire shared memories or
+        # anyone else's; background work can't touch anyone's private memories.
+        if record is None or record.user_id != ctx.user_id:
+            return ToolResult.failure(f"no memory {args.memory_id}")
+        await self.memory.forget(args.memory_id)
+        return ToolResult.success(f"forgot {args.memory_id}")
 
 
 class IngestArgs(ToolArgs):

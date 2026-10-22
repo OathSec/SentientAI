@@ -324,9 +324,13 @@ async def test_proactive_inner_life(runtime_factory: Any) -> None:
     assert reflections
     intrinsic = next(t for t in await rt.c.db.tasks.list() if t.source is TaskSource.INTRINSIC)
     assert intrinsic.goal_id == goal.id
-    await wait_for(lambda: rt.c.db.goals.get(goal.id), timeout=5)
-    updated = await rt.c.db.goals.get(goal.id)
-    assert updated is not None and updated.attempts >= 1
+
+    # The goal is updated after reflection, slightly after the task itself finishes.
+    async def goal_attempted() -> bool:
+        current = await rt.c.db.goals.get(goal.id)
+        return current is not None and current.attempts >= 1
+
+    await wait_for(goal_attempted, timeout=10)
 
 
 async def test_state_snapshot(runtime_factory: Any) -> None:
