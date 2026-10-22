@@ -1,0 +1,195 @@
+"""Tiered model routing.
+
+Two tiers map onto the hardware plan:
+
+* ``fast``  - small quantized model on the secondary GPU: routing,
+  classification, summarization, extraction, reflection, self-assessment.
+* ``heavy`` - large model across the primary GPUs: reasoning, planning,
+  code generation, open conversation.
+
+Selection considers the task kind, whether the prompt fits the tier's context
+window, prompt complexity, and metacognitive confidence (low confidence
+escalates to heavy). Each tier sits behind a circuit breaker; when a tier is
+down the router falls back to the other one.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from sentientai.config import RoutingConfig
+from sentientai.core.clock import Clock, SystemClock
+from sentientai.core.logging import get_logger
+from sentientai.core.metrics import Metrics
+from sentientai.errors import ModelError, ModelUnavailableError
+from sentientai.models.types import (
+    ChatRequest,
+    ChatResponse,
+    LLMClient,
+    ModelTier,
+    TaskKind,
+    estimate_messages_tokens,
+)
+from sentientai.safety.limits import TokenBucket
+
+log = get_logger(__name__)
+
+
+class CircuitBreaker:
+    def __init__(self, threshold: int, cooldown_s: float, clock: Clock) -> None:
+        self.threshold = threshold
+        self.cooldown_s = cooldown_s
+        self.clock = clock
+        self.failures = 0
+        self.opened_at: float | None = None
+
+    @property
+    def state(self) -> str:
+        if self.opened_at is None:
+            return "closed"
+        if self.clock.monotonic() - self.opened_at >= self.cooldown_s:
+            return "half_open"
+        return "open"
+
+    def allow(self) -> bool:
+        return self.state != "open"
+
+    def success(self) -> None:
+        self.failures = 0
+        self.opened_at = None
+
+    def failure(self) -> None:
+        self.failures += 1
+        if self.failures >= self.threshold:
+            self.opened_at = self.clock.monotonic()
+
+
+@dataclass(frozen=True)
+class RouteDecision:
+    tier: ModelTier
+    reason: str
+
+
+class ModelRouter:
+    def __init__(
+        self,
+        clients: dict[ModelTier, LLMClient],
+        config: RoutingConfig,
+        *,
+        metrics: Metrics | None = None,
+        rate_limiter: TokenBucket | None = None,
+        clock: Clock | None = None,
+    ) -> None:
+        if not clients:
+            raise ValueError("ModelRouter needs at least one client")
+        self.clients = clients
+        self.config = config
+        self.metrics = metrics
+        self.rate_limiter = rate_limiter
+        self.clock = clock or SystemClock()
+        self.breakers = {
+            tier: CircuitBreaker(
+                config.circuit_failure_threshold, config.circuit_cooldown_s, self.clock
+            )
+            for tier in clients
+        }
+
+    def _available(self, tier: ModelTier) -> ModelTier:
+        if tier in self.clients:
+            return tier
+        return next(iter(self.clients))
+
+    def select(
+        self,
+        kind: TaskKind,
+        request: ChatRequest,
+        *,
+        prefer: ModelTier | None = None,
+        confidence: float | None = None,
+    ) -> RouteDecision:
+        if prefer is not None:
+            return RouteDecision(self._available(prefer), "explicit preference")
+        tokens = estimate_messages_tokens(request.messages)
+        fast = self.clients.get(ModelTier.FAST)
+        if confidence is not None and confidence < self.config.escalate_below_confidence:
+            return RouteDecision(
+                self._available(ModelTier.HEAVY), f"low confidence {confidence:.2f}"
+            )
+        if fast is not None and tokens > int(fast.context_window * 0.85):
+            return RouteDecision(
+                self._available(ModelTier.HEAVY), "prompt exceeds fast context window"
+            )
+        if kind.value in self.config.heavy_task_kinds:
+            return RouteDecision(
+                self._available(ModelTier.HEAVY), f"{kind.value} is a heavy task kind"
+            )
+        if kind.value in self.config.fast_task_kinds:
+            return RouteDecision(
+                self._available(ModelTier.FAST), f"{kind.value} is a fast task kind"
+            )
+        if tokens > self.config.complexity_token_threshold:
+            return RouteDecision(self._available(ModelTier.HEAVY), "complex prompt")
+        return RouteDecision(self._available(ModelTier.FAST), "default")
+
+    async def chat(
+        self,
+        request: ChatRequest,
+        *,
+        kind: TaskKind = TaskKind.CHAT,
+        prefer: ModelTier | None = None,
+        confidence: float | None = None,
+    ) -> ChatResponse:
+        decision = self.select(kind, request, prefer=prefer, confidence=confidence)
+        order = [decision.tier]
+        if self.config.fallback_to_other_tier:
+            order += [t for t in self.clients if t not in order]
+        errors: list[str] = []
+        for tier in order:
+            breaker = self.breakers[tier]
+            if not breaker.allow():
+                errors.append(f"{tier.value}: circuit open")
+                continue
+            client = self.clients[tier]
+            if self.rate_limiter is not None:
+                await self.rate_limiter.acquire(timeout=120)
+            try:
+                response = await client.chat(request)
+            except ModelError as exc:
+                breaker.failure()
+                errors.append(f"{tier.value}: {exc}")
+                self._observe(tier, "error", None)
+                log.warning(
+                    "model tier failed", extra={"tier": tier.value, "error": str(exc)[:200]}
+                )
+                continue
+            breaker.success()
+            response.tier = tier
+            self._observe(tier, "ok" if tier == decision.tier else "fallback", response)
+            return response
+        raise ModelUnavailableError("no model tier available: " + "; ".join(errors))
+
+    def _observe(self, tier: ModelTier, outcome: str, response: ChatResponse | None) -> None:
+        if self.metrics is None:
+            return
+        self.metrics.llm_requests.inc(tier=tier.value, outcome=outcome)
+        if response is not None:
+            self.metrics.llm_latency.observe(response.latency_ms / 1000, tier=tier.value)
+            self.metrics.llm_tokens.inc(
+                response.usage.prompt_tokens, tier=tier.value, kind="prompt"
+            )
+            self.metrics.llm_tokens.inc(
+                response.usage.completion_tokens, tier=tier.value, kind="completion"
+            )
+
+    def context_window(self, tier: ModelTier) -> int:
+        return self.clients[self._available(tier)].context_window
+
+    async def health(self) -> dict[str, bool]:
+        return {tier.value: await client.health() for tier, client in self.clients.items()}
+
+    async def aclose(self) -> None:
+        seen: set[int] = set()
+        for client in self.clients.values():
+            if id(client) not in seen:
+                seen.add(id(client))
+                await client.aclose()
