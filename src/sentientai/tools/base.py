@@ -78,6 +78,11 @@ class Tool(ABC, Generic[A]):
     timeout_s: float = 60.0
     tags: tuple[str, ...] = ()
 
+    def available(self) -> bool:
+        """False when the tool can't work right now (e.g. no image server): it isn't offered."""
+
+        return True
+
     def schema(self) -> ToolSchema:
         params: dict[str, Any] = _clean_schema(self.args_model.model_json_schema())
         params.setdefault("type", "object")
@@ -113,7 +118,9 @@ class ToolRegistry:
 
     @property
     def names(self) -> list[str]:
-        return sorted(self._tools)
+        """Tools that can be used now (see :meth:`Tool.available`)."""
+
+        return sorted(n for n, t in self._tools.items() if t.available())
 
     def tools(self) -> list[Tool[Any]]:
         return [self._tools[n] for n in self.names]
@@ -123,6 +130,8 @@ class ToolRegistry:
     ) -> list[ToolSchema]:
         selected = []
         for tool in self.tools():
+            if not tool.available():
+                continue
             if names is not None and tool.name not in names:
                 continue
             if max_risk is not None and tool.risk > max_risk:

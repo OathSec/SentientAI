@@ -289,7 +289,22 @@ class CognitiveAgent:
             outcome, guard, ctx, kind=kind, prefer=prefer, temperature=temperature, allowed=allowed
         )
         outcome.tier = response.tier
-        assessment = await self._assess(task, answer, outcome, guard, recalled)
+        grounded_chat = (
+            task.kind == "chat" and self.grounding is not None and self.settings.mind.grounding
+        )
+
+        async def judge(text: str) -> tuple[Assessment, str]:
+            """Rate the answer and check it against memory at the same time (both only need it)."""
+
+            if grounded_chat:
+                rated, checked = await asyncio.gather(
+                    self._assess(task, text, outcome, guard, recalled),
+                    self._ground(task, text, outcome, perspective, recalled, history),
+                )
+                return rated, checked
+            return await self._assess(task, text, outcome, guard, recalled), text
+
+        assessment, answer = await judge(answer)
         if (
             self.metacognition.should_escalate(assessment, response.tier)
             and ModelTier.HEAVY in self.router.clients
@@ -315,9 +330,7 @@ class CognitiveAgent:
             )
             outcome.tier = response.tier
             outcome.escalated = True
-            assessment = await self._assess(task, answer, outcome, guard, recalled)
-        if task.kind == "chat" and self.grounding is not None and self.settings.mind.grounding:
-            answer = await self._ground(task, answer, outcome, perspective, recalled, history)
+            assessment, answer = await judge(answer)
         outcome.answer = answer
         outcome.assessment = assessment
 

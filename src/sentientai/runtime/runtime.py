@@ -165,6 +165,8 @@ class Runtime:
             # Unfinished work goes back on the queue and resumes after the next boot.
             for task_id in running:
                 await c.db.tasks.requeue(task_id, f"interrupted by {reason}; will resume")
+        if self._afterthoughts:  # let in-flight reflections finish
+            await asyncio.wait(list(self._afterthoughts), timeout=grace_s)
         everything = [*self._activities, *self._afterthoughts, *self._background]
         for task in everything:
             task.cancel()
@@ -302,6 +304,7 @@ class Runtime:
         user_id: str | None = None,
         speaker: str | None = None,
         user: UserRecord | None = None,
+        recorded: asyncio.Event | None = None,
     ) -> ChatReply:
         """A message from someone, and Fuzzy's reply.
 
@@ -324,6 +327,8 @@ class Runtime:
         await c.db.conversations.insert(
             ConversationMessage(session_id=session_id, user_id=user_id, role="user", content=text)
         )
+        if recorded is not None:
+            recorded.set()  # the message is stored: a page loaded now will show it
         metadata: dict[str, Any] = {}
         if speaker:
             metadata["speaker"] = speaker
@@ -622,7 +627,13 @@ class Runtime:
         if outcome.loop_break:
             affect.on_loop_break()
         self._notify(task.id)
+        # Reflecting on the work happens after the reply is out and must not hold the task slot,
+        # or the next person's message would queue behind it.
+        self._start_afterthought(self._after_task(task, outcome), f"reflect:{task.id}")
+        return outcome
 
+    async def _after_task(self, task: TaskRecord, outcome: TaskOutcome) -> None:
+        c = self.c
         if self.settings.runtime.reflect_after_tasks and outcome.status is not TaskStatus.CANCELLED:
             try:
                 with log_context(task_id=task.id):
@@ -636,7 +647,6 @@ class Runtime:
                     attempted=True,
                     note=f"{outcome.status.value}: {(outcome.answer or outcome.error or '')[:200]}",
                 )
-        return outcome
 
     async def _pursue_goal(self, goal_id: str) -> None:
         goal = await self.c.db.goals.get(goal_id)

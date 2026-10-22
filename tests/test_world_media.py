@@ -394,3 +394,12 @@ async def test_other_peoples_names_are_removed(sqlite_db: Database, tmp_path: Pa
     assert (await redactor.for_viewer(alice.id, privileged=True))(text) == text
     assert (await redactor.shared())("Alice Smith met Bob") == "someone met someone"
     assert for_alice("") == ""
+
+
+async def test_it_is_not_offered_image_tools_it_cannot_use(runtime_factory: Any) -> None:  # noqa: F811
+    rt = await runtime_factory(Brain(), start=False)
+    assert not rt.c.images.available
+    assert "image_generate" not in rt.c.registry.names
+    assert "image_generate" not in {s.name for s in rt.c.registry.schemas()}
+    rt.c.images.backend = FakeBackend()  # an image server appears
+    assert "image_generate" in rt.c.registry.names

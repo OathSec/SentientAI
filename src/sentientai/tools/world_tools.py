@@ -203,6 +203,9 @@ class ImageGenerate(Tool[ImageArgs]):
         self.images = images
         self.quotas = quotas
 
+    def available(self) -> bool:
+        return self.images.available  # no image server, no tool: Fuzzy knows it can't draw
+
     async def run(self, args: ImageArgs, ctx: ToolContext) -> ToolResult:
         if not self.images.available:
             return ToolResult.failure("image generation isn't set up on this server")

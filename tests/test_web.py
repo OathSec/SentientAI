@@ -92,6 +92,29 @@ def post(client: httpx.AsyncClient, path: str, csrf: str, **kwargs: Any) -> Any:
     return client.post(path, headers=headers, **kwargs)
 
 
+async def talk(
+    client: httpx.AsyncClient, csrf: str, text: str, *, timeout: float = 15
+) -> dict[str, Any]:
+    """Say something and wait for Fuzzy's reply (replies are made in the background)."""
+
+    latest = (await client.get("/api/chat/history?limit=1")).json()["messages"]
+    cursor = latest[-1]["at"] if latest else "1970-01-01T00:00:00+00:00"
+    accepted = await post(client, "/api/chat", csrf, json={"message": text})
+    assert accepted.status_code == 202, accepted.text
+    heard: list[dict[str, Any]] = []
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        r = (await client.get("/api/chat/poll", params={"after": cursor})).json()
+        heard = r["messages"]
+        if not r["busy"]:
+            break
+        assert asyncio.get_running_loop().time() < deadline, "no reply in time"
+        await asyncio.sleep(0.05)
+    replies = [m for m in heard if m["role"] == "assistant"]
+    assert replies, heard
+    return {"answer": replies[-1]["content"], "media": replies[-1]["media"], "messages": heard}
+
+
 async def person(
     w: Web,
     username: str,
@@ -340,7 +363,7 @@ async def test_csrf_and_origin_are_enforced(web_factory: Any) -> None:
     )
     assert form.status_code in (415, 422)  # form posts are not JSON
     ok = await post(client, "/api/chat", csrf, json=msg)
-    assert ok.status_code == 200 and ok.json()["answer"] == "Hello there."
+    assert ok.status_code == 202 and ok.json()["accepted"] is True
 
     # Login and sign-up (no session yet) refuse cross-site origins and non-JSON too.
     anon = w.client()
@@ -481,7 +504,7 @@ async def test_export_and_erase_account(web_factory: Any) -> None:
     )
     w = await web_factory(brain)
     user, client, csrf = await person(w, "dana")
-    await post(client, "/api/chat", csrf, json={"message": "My cat is called Biscuit"})
+    await talk(client, csrf, "My cat is called Biscuit")
     await asyncio.sleep(0.2)
     data = (await client.get("/api/me/export")).json()
     assert data["account"]["username"] == "dana" and "password_hash" not in str(data)
@@ -516,9 +539,8 @@ async def test_chat_history_quota_and_pause(web_factory: Any) -> None:
     brain = Brain(["One.", "Two.", "Three."])
     w = await web_factory(brain, accounts={"daily_messages": 2})
     _, client, csrf = await person(w, "dana")
-    first = await post(client, "/api/chat", csrf, json={"message": "first"})
-    assert first.json()["answer"] == "One."
-    await post(client, "/api/chat", csrf, json={"message": "second"})
+    assert (await talk(client, csrf, "first"))["answer"] == "One."
+    await talk(client, csrf, "second")
     over = await post(client, "/api/chat", csrf, json={"message": "third"})
     assert over.status_code == 429 and "message limit" in over.json()["detail"]
     history = (await client.get("/api/chat/history")).json()
@@ -554,12 +576,16 @@ async def test_only_one_message_at_a_time_per_person(web_factory: Any) -> None:
 
     w = await web_factory(llm=ScriptedLLM(slow))
     _, client, csrf = await person(w, "dana")
-    first = asyncio.create_task(post(client, "/api/chat", csrf, json={"message": "slow one"}))
+    first = asyncio.create_task(talk(client, csrf, "slow one"))
     await asyncio.sleep(0.3)
     second = await post(client, "/api/chat", csrf, json={"message": "impatient"})
     assert second.status_code == 429
+    busy = (await client.get("/api/chat/poll")).json()
+    assert busy["busy"] is True and busy["since"]
+    assert (await client.get("/api/chat/history")).json()["busy"] is True
     gate.set()
-    assert (await first).json()["answer"] == "Finally."
+    assert (await first)["answer"] == "Finally."
+    assert (await client.get("/api/chat/poll")).json()["busy"] is False
 
 
 # -------------------------------------------------- people don't see each other
@@ -589,14 +615,9 @@ async def test_one_persons_world_stays_theirs(web_factory: Any) -> None:
     w = await web_factory(brain)
     _alice, a_client, a_csrf = await person(w, "alice")
     _bob, b_client, b_csrf = await person(w, "bob")
-    await post(
-        a_client,
-        "/api/chat",
-        a_csrf,
-        json={"message": "My secret garden plan is to grow blue tomatoes"},
-    )
+    await talk(a_client, a_csrf, "My secret garden plan is to grow blue tomatoes")
     await asyncio.sleep(0.4)
-    await post(b_client, "/api/chat", b_csrf, json={"message": "What does Alice grow?"})
+    await talk(b_client, b_csrf, "What does Alice grow?")
     await asyncio.sleep(0.3)
 
     def everything(*responses: Any) -> str:
@@ -645,7 +666,7 @@ async def test_public_pages_show_only_the_shared_mind(web_factory: Any) -> None:
     )
     w = await web_factory(brain, accounts={"public_pages": True})
     _, client, csrf = await person(w, "alice")
-    await post(client, "/api/chat", csrf, json={"message": "hello"})
+    await talk(client, csrf, "hello")
     await w.rt.c.agency.beat()
     visitor = w.client()
     page = await visitor.get("/api/brain")
@@ -936,7 +957,7 @@ async def test_images_are_served_only_to_people_allowed_to_see_them(
     w.rt.c.images.backend = FakeBackend(PNG)
     dana, d_client, d_csrf = await person(w, "dana")
     _, e_client, _ = await person(w, "eve")
-    reply = (await post(d_client, "/api/chat", d_csrf, json={"message": "draw a hill"})).json()
+    reply = await talk(d_client, d_csrf, "draw a hill")
     [item] = reply["media"]
     own = await d_client.get(item["url"])
     assert own.status_code == 200 and own.content == PNG
@@ -1015,3 +1036,55 @@ async def test_expired_sessions_are_cleaned_up(web_factory: Any) -> None:
     assert await w.rt.c.db.sessions.purge_expired(w.rt.c.clock.now()) == 2
     assert (await client.get("/api/me")).status_code == 401
     assert user.id
+
+
+async def test_you_can_leave_and_come_back_to_find_the_reply(web_factory: Any) -> None:
+    gate = asyncio.Event()
+
+    async def slow(request: Any) -> str:
+        prompt = request.messages[-1].text
+        if "Rate how likely" in prompt:
+            return '{"confidence": 0.9, "gaps": []}'
+        if "You just" in prompt or prompt.startswith("Check a reply"):
+            return '{"unsupported": [], "new_self_decisions": [], "summary": "x", "lessons": [], "facts": []}'
+        await gate.wait()
+        return "Sorry for the wait, I'm here."
+
+    w = await web_factory(llm=ScriptedLLM(slow))
+    _, client, csrf = await person(w, "dana")
+    accepted = await post(client, "/api/chat", csrf, json={"message": "are you there?"})
+    assert accepted.status_code == 202  # the request is over; the reply is Fuzzy's to make
+    await client.aclose()  # the person closes the page
+
+    # Later, a fresh session (a new page load) finds it still working, then finds the reply.
+    again = w.client()
+    await sign_in(again, "dana")
+    history = (await again.get("/api/chat/history")).json()
+    assert history["busy"] is True and [m["content"] for m in history["messages"]] == [
+        "are you there?"
+    ]
+    gate.set()
+    for _ in range(100):
+        r = (
+            await again.get("/api/chat/poll", params={"after": history["messages"][-1]["at"]})
+        ).json()
+        if not r["busy"]:
+            break
+        await asyncio.sleep(0.05)
+    assert [m["content"] for m in r["messages"]] == ["Sorry for the wait, I'm here."]
+    assert (await again.get("/api/chat/history")).json()["busy"] is False
+
+
+async def test_a_failed_reply_leaves_a_message_and_refunds_the_quota(web_factory: Any) -> None:
+    from sentientai.errors import ModelError
+
+    async def broken(request: Any) -> str:
+        raise ModelError("model offline")
+
+    w = await web_factory(llm=ScriptedLLM(broken), accounts={"daily_messages": 5})
+    _, client, csrf = await person(w, "dana")
+    r = await talk(client, csrf, "hello?")
+    assert r["answer"]  # something is said rather than silence
+    usage = (await client.get("/api/me")).json()["usage"]["messages"]
+    assert usage in (0, 1)
+    assert (await client.get("/api/chat/poll?after=garbage")).status_code == 422

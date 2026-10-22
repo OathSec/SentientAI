@@ -15,6 +15,8 @@ from sentientai.core.jsonparse import extract_json, iter_json, strip_reasoning
 from sentientai.models.types import Message, Role, ToolCall, ToolSchema
 
 _TAG = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+# Small models sometimes invent a tag named after the tool: <avatar_design>{...}</avatar_design>.
+_NAMED_TAG = re.compile(r"<([A-Za-z_][\w\-]*)>\s*(\{.*?\})\s*</\1>", re.DOTALL)
 
 PROTOCOL_HEADER = """\
 ## Tool use
@@ -58,6 +60,17 @@ def parse_tool_calls(text: str, known_tools: set[str]) -> tuple[list[ToolCall], 
 
     visible, _ = strip_reasoning(text)
     calls: list[ToolCall] = []
+    named = [m for m in _NAMED_TAG.finditer(visible) if m.group(1) in known_tools]
+    if named:  # the body is the arguments (or a {"arguments": ...} wrapper)
+        for match in named:
+            body = next(iter_json(match.group(2)), None)
+            if isinstance(body, dict):
+                args = body.get("arguments") if isinstance(body.get("arguments"), dict) else body
+                calls.append(ToolCall(name=match.group(1), arguments=args))
+        if calls:
+            return calls, _NAMED_TAG.sub(
+                lambda m: "" if m.group(1) in known_tools else m.group(0), visible
+            ).strip()
     tagged = _TAG.findall(visible)
     candidates: list[Any] = []
     for block in tagged:

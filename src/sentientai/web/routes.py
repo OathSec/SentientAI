@@ -18,9 +18,11 @@ from pydantic import BaseModel, Field
 
 from sentientai.accounts.quotas import QuotaExceeded
 from sentientai.accounts.service import AuthError, LoginThrottle, clean_display_name
+from sentientai.core.logging import get_logger
 from sentientai.media.images import ImageError
 from sentientai.runtime.runtime import Runtime
 from sentientai.storage.records import (
+    ConversationMessage,
     MemoryKind,
     Scope,
     UserRecord,
@@ -37,6 +39,8 @@ from sentientai.web.security import (
     raise_for,
     set_session_cookie,
 )
+
+log = get_logger(__name__)
 
 MAX_MESSAGE_CHARS = 4000
 CHAT_TIMEOUT_S = 300.0
@@ -122,7 +126,8 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
         if not password_limit.allow(user.id):
             raise HTTPException(status_code=429, detail="Too many attempts. Please wait a minute.")
 
-    chat_locks: dict[str, asyncio.Lock] = {}
+    # person -> (the reply being made for them, when it started)
+    chat_jobs: dict[str, tuple[asyncio.Task[None], Any]] = {}
     streams: dict[str, int] = {}
 
     Anyone = Annotated[Principal, Depends(auth.anyone)]
@@ -325,7 +330,39 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
         }
 
     # ------------------------------------------------------------------ chat
-    @router.post("/api/chat")
+    def message_json(m: Any) -> dict[str, Any]:
+        return {
+            "role": m.role,
+            "content": m.content,
+            "at": m.created_at.isoformat(),
+            "media": [public_media(i) for i in m.metadata.get("media", [])],
+        }
+
+    async def reply_in_background(user: UserRecord, text: str, recorded: asyncio.Event) -> None:
+        """Fuzzy's reply is made on the server, not inside the browser's request, so a person can
+        close the page, come back later and find it (it is stored with the conversation)."""
+
+        session = f"user:{user.id}"
+        try:
+            await runtime.chat(session, text, user=user, timeout=CHAT_TIMEOUT_S, recorded=recorded)
+        except TimeoutError:
+            await c.quotas.take(user.id, messages=-1, privileged=True)
+            apology = (
+                "Sorry, that took me too long and I lost my train of thought. Could you ask again?"
+            )
+        except Exception:
+            log.exception("chat reply failed", extra={"user_id": user.id})
+            await c.quotas.take(user.id, messages=-1, privileged=True)
+            apology = "Sorry, something went wrong on my side. Could you try again?"
+        else:
+            return
+        await c.db.conversations.insert(
+            ConversationMessage(
+                session_id=session, user_id=user.id, role="assistant", content=apology
+            )
+        )
+
+    @router.post("/api/chat", status_code=202)
     async def chat(body: ChatBody, request: Request, p: Person) -> dict[str, Any]:
         json_only(request)
         user = user_of(p)
@@ -338,27 +375,50 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
         text = body.message.strip()
         if not text:
             raise HTTPException(status_code=422, detail="Say something first.")
-        lock = chat_locks.setdefault(user.id, asyncio.Lock())
-        if lock.locked():
+        running = chat_jobs.get(user.id)
+        if running is not None and not running[0].done():
             raise HTTPException(status_code=429, detail="Still working on your last message.")
-        async with lock:
+        try:
+            await c.quotas.take(user.id, messages=1, privileged=p.admin)
+        except QuotaExceeded as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        started = c.clock.now()
+        recorded = asyncio.Event()
+        task = asyncio.create_task(
+            reply_in_background(user, text, recorded), name=f"chat:{user.id}"
+        )
+        chat_jobs[user.id] = (task, started)
+        task.add_done_callback(
+            lambda t: (
+                chat_jobs.pop(user.id, None) if chat_jobs.get(user.id, (None,))[0] is t else None
+            )
+        )
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(recorded.wait(), timeout=5)
+        return {"accepted": True, "at": started.isoformat()}
+
+    @router.get("/api/chat/poll")
+    async def chat_poll(
+        p: Person, after: str | None = Query(None, max_length=40)
+    ) -> dict[str, Any]:
+        """Is Fuzzy still working on a reply, and what has been said since ``after``?"""
+
+        from datetime import datetime
+
+        user = user_of(p)
+        cutoff = None
+        if after:
             try:
-                await c.quotas.take(user.id, messages=1, privileged=p.admin)
-            except QuotaExceeded as exc:
-                raise HTTPException(status_code=429, detail=str(exc)) from exc
-            try:
-                reply = await runtime.chat(
-                    f"user:{user.id}", text, user=user, timeout=CHAT_TIMEOUT_S
-                )
-            except TimeoutError as exc:
-                await c.quotas.take(user.id, messages=-1, privileged=True)
-                raise HTTPException(
-                    status_code=504, detail="That took too long. Try again."
-                ) from exc
+                cutoff = datetime.fromisoformat(after)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="bad cursor") from exc
+        running = chat_jobs.get(user.id)
+        busy = running is not None and not running[0].done()
+        messages = await c.db.conversations.after(user.id, cutoff) if cutoff else []
         return {
-            "answer": reply.answer,
-            "media": [public_media(m) for m in reply.media],
-            "at": c.clock.now().isoformat(),
+            "busy": busy,
+            "since": running[1].isoformat() if busy and running else None,
+            "messages": [message_json(m) for m in messages],
         }
 
     @router.get("/api/chat/history")
@@ -375,18 +435,12 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
                 cutoff = datetime.fromisoformat(before)
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail="bad cursor") from exc
-        messages = await c.db.conversations.page(user_of(p).id, limit=limit, before=cutoff)
+        user = user_of(p)
+        messages = await c.db.conversations.page(user.id, limit=limit, before=cutoff)
         return {
-            "messages": [
-                {
-                    "role": m.role,
-                    "content": m.content,
-                    "at": m.created_at.isoformat(),
-                    "media": [public_media(i) for i in m.metadata.get("media", [])],
-                }
-                for m in messages
-            ],
+            "messages": [message_json(m) for m in messages],
             "more": len(messages) == limit,
+            "busy": bool((j := chat_jobs.get(user.id)) and not j[0].done()),
         }
 
     @router.get("/api/notes")

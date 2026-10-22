@@ -513,3 +513,22 @@ async def test_memory_tools(memory: MemorySystem, ws: Workspace, tmp_path: Path)
     assert (await call("memory_forget", memory_id=memory_id, reason="test")).ok
     ingest = await call("ingest", source="notes.md")
     assert "ingested 'Notes'" in ingest.output
+
+
+def test_invented_tool_tags_still_run_the_tool() -> None:
+    from sentientai.models.toolproto import parse_tool_calls
+
+    known = {"avatar_design", "memory_recall"}
+    text = (
+        "I'll make this for you:\n<avatar_design>\n"
+        '{"description": "a surreal room", "parts": [{"shape": "sphere"}]}\n</avatar_design>\nEnjoy!'
+    )
+    calls, visible = parse_tool_calls(text, known)
+    assert [c.name for c in calls] == ["avatar_design"]
+    assert calls[0].arguments["description"] == "a surreal room"
+    assert "<avatar_design>" not in visible and "Enjoy!" in visible
+    wrapped = '<memory_recall>{"arguments": {"query": "cats"}}</memory_recall>'
+    assert parse_tool_calls(wrapped, known)[0][0].arguments == {"query": "cats"}
+    # A tag that isn't a tool is just text.
+    calls, visible = parse_tool_calls('<b>{"x": 1}</b>', known)
+    assert calls == [] and "<b>" in visible

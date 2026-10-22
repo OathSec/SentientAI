@@ -3,33 +3,100 @@
   const state = await boot("user");
   if (!state) return;
   const name = state.name;
-  const me = state.user.display_name;
   const log = $("log"), status = $("status"), text = $("text"), send = $("send");
-  let oldest = null, busy = false;
+  let cursor = null;          // time of the newest message shown (server time)
+  let oldest = null;
+  let pending = null;         // the optimistic bubble for a message the server hasn't echoed yet
+  let typing = null;          // the "Fuzzy is typing" bubble
+  let polling = null;
+  let lastDay = null;
 
-  function message(m) {
-    const fuzzy = m.role === "assistant";
-    const node = el("div", { class: "msg " + (fuzzy ? "fuzzy" : "me") },
-      el("div", { class: "head" }, el("span", { class: "name" }, fuzzy ? name : me), clock(m.at)),
-      el("div", { class: "text" }, m.content));
+  const dayKey = (iso) => new Date(iso).toDateString();
+  const hhmm = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const nearBottom = () => window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
+  const toBottom = () => window.scrollTo(0, document.body.scrollHeight);
+
+  function bubble(m, extra) {
+    const mine = m.role !== "assistant";
+    const node = el("div", { class: "msg " + (mine ? "me" : "fuzzy") + (extra ? " " + extra : "") },
+      el("div", { class: "bubble" }, m.content));
     for (const image of m.media || []) {
-      node.append(el("img", { src: image.url, alt: "An image from " + name, loading: "lazy" }));
+      node.firstChild.append(el("img", { src: image.url, alt: "An image from " + name, loading: "lazy" }));
     }
+    node.append(el("div", { class: "stamp" }, extra === "pending" ? "sending…" : hhmm(m.at)));
     return node;
+  }
+  function dayLabel(iso) {
+    return el("div", { class: "day" }, new Date(iso).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }));
+  }
+
+  function append(messages) {
+    const stick = nearBottom();
+    for (const m of messages) {
+      if (cursor && m.at <= cursor) continue;
+      if (pending && m.role === "user" && pending.dataset.text === m.content) { pending.remove(); pending = null; }
+      if (typing) typing.remove();
+      if (dayKey(m.at) !== lastDay) { log.append(dayLabel(m.at)); lastDay = dayKey(m.at); }
+      log.append(bubble(m));
+      if (typing) log.append(typing);
+      cursor = m.at;
+    }
+    if (stick) toBottom();
+  }
+
+  function showTyping(since) {
+    if (typing) return;
+    typing = el("div", { class: "msg fuzzy typing" }, el("div", { class: "bubble" }, el("span", { class: "dot" }), el("span", { class: "dot" }), el("span", { class: "dot" })));
+    log.append(typing);
+    if (nearBottom()) toBottom();
+    const started = since ? new Date(since).getTime() : Date.now();
+    typing._timer = setInterval(() => {
+      const s = Math.round((Date.now() - started) / 1000);
+      status.textContent = s >= 8 ? name + " is thinking… " + s + " s. You can leave; the reply will be here when you come back." : "";
+    }, 1000);
+  }
+  function hideTyping() {
+    if (typing) { clearInterval(typing._timer); typing.remove(); typing = null; }
+    status.textContent = "";
+  }
+
+  function startPolling(since) {
+    showTyping(since);
+    if (polling) return;
+    polling = setInterval(async () => {
+      try {
+        const r = await api("/api/chat/poll?after=" + encodeURIComponent(cursor || new Date(0).toISOString()));
+        append(r.messages);
+        if (!r.busy) stopPolling();
+      } catch (e) { /* try again on the next tick */ }
+    }, 1500);
+  }
+  function stopPolling() {
+    clearInterval(polling); polling = null; hideTyping();
+    send.disabled = false;
+    api("/api/me").then(showLimits).catch(() => {});
+    if (document.hasFocus()) text.focus();
   }
 
   async function loadHistory(before) {
     const query = "?limit=40" + (before ? "&before=" + encodeURIComponent(before) : "");
     const data = await api("/api/chat/history" + query);
     if (data.messages.length) oldest = data.messages[0].at;
-    const fragment = document.createDocumentFragment();
-    for (const m of data.messages) fragment.append(message(m));
-    log.insertBefore(fragment, before ? log.firstChild : null);
     $("earlier").classList.toggle("hidden", !data.more);
-    if (!before) {
-      if (!data.messages.length) log.append(el("p", { class: "muted", id: "empty" }, "This is the start of your conversation with " + name + "."));
-      window.scrollTo(0, document.body.scrollHeight);
+    if (before) {
+      const fragment = document.createDocumentFragment();
+      for (const m of data.messages) fragment.append(bubble(m));
+      log.insertBefore(fragment, log.firstChild);
+      return data;
     }
+    for (const m of data.messages) {
+      if (dayKey(m.at) !== lastDay) { log.append(dayLabel(m.at)); lastDay = dayKey(m.at); }
+      log.append(bubble(m));
+      cursor = m.at;
+    }
+    if (!data.messages.length) log.append(el("p", { class: "muted day" }, "This is the start of your conversation with " + name + "."));
+    toBottom();
+    return data;
   }
 
   async function loadNotes() {
@@ -60,31 +127,40 @@
   $("form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const content = text.value.trim();
-    if (!content || busy) return;
-    busy = true; send.disabled = true;
-    const empty = $("empty"); if (empty) empty.remove();
-    log.append(message({ role: "user", content, at: new Date().toISOString() }));
+    if (!content || send.disabled) return;
+    send.disabled = true;
+    const empty = log.querySelector("p.day"); if (empty) empty.remove();
+    pending = bubble({ role: "user", content, at: new Date().toISOString() }, "pending");
+    pending.dataset.text = content;
+    log.append(pending);
     text.value = "";
-    window.scrollTo(0, document.body.scrollHeight);
-    const started = Date.now();
-    const timer = setInterval(() => { status.textContent = name + " is thinking… " + Math.round((Date.now() - started) / 1000) + " s"; }, 500);
+    toBottom();
     try {
-      const reply = await api("/api/chat", { method: "POST", body: { message: content } });
-      log.append(message({ role: "assistant", content: reply.answer, at: reply.at, media: reply.media }));
-      status.textContent = "";
+      const r = await api("/api/chat", { method: "POST", body: { message: content } });
+      startPolling(r.at);
     } catch (err) {
-      status.textContent = "";
-      log.append(el("p", { class: "notice error" }, err.message));
-    } finally {
-      clearInterval(timer); busy = false; send.disabled = false; text.focus();
-      window.scrollTo(0, document.body.scrollHeight);
-      api("/api/me").then(showLimits).catch(() => {});
+      pending.remove(); pending = null;
+      text.value = content;
+      status.textContent = err.message;
+      send.disabled = false;
     }
   });
   text.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("form").requestSubmit(); }
   });
+  // Coming back to the tab: catch up on anything said while away.
+  document.addEventListener("visibilitychange", async () => {
+    if (document.hidden || polling || !cursor) return;
+    try { const r = await api("/api/chat/poll?after=" + encodeURIComponent(cursor)); append(r.messages); if (r.busy) { send.disabled = true; startPolling(r.since); } } catch (e) { /* ignore */ }
+  });
 
-  await Promise.all([loadHistory(null), loadNotes(), loadMood(), api("/api/me").then(showLimits)]);
+  const [history] = await Promise.all([loadHistory(null), loadNotes(), loadMood(), api("/api/me").then(showLimits)]);
+  if (history.busy) {
+    // Fuzzy is still working on something you sent before you left.
+    send.disabled = true;
+    const r = await api("/api/chat/poll?after=" + encodeURIComponent(cursor || new Date(0).toISOString()));
+    append(r.messages);
+    if (r.busy) startPolling(r.since); else send.disabled = false;
+  }
   text.focus();
 })();

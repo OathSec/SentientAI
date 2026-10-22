@@ -30,6 +30,9 @@ models:
     temperature: 0.3
     timeout_s: 600
     supports_tools: true    # set false if the server/chat template lacks native tool calling
+    # Qwen3-family models "think" at length before answering, which makes every reply slow.
+    # This asks llama.cpp's server to skip that (it ignores the field if unsupported):
+    # extra_body: {chat_template_kwargs: {enable_thinking: false}}
     device: "cuda (RTX 2070)"
   fast:
     base_url: http://127.0.0.1:8002/v1
@@ -39,6 +42,7 @@ models:
     temperature: 0.2
     timeout_s: 180
     supports_tools: true
+    # extra_body: {chat_template_kwargs: {enable_thinking: false}}
     device: "cuda (GTX 1660 Ti)"
   embedding:
     provider: openai        # "hashing" = offline lexical fallback (no server needed)

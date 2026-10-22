@@ -100,16 +100,26 @@ button:disabled { opacity: 0.5; cursor: default; }
 .notice { border: 1px solid var(--line); background: var(--soft); padding: 0.5rem 0.75rem; border-radius: 3px; margin-bottom: 0.75rem; }
 .notice.error { border-color: var(--warn); color: var(--warn); }
 
-/* chat */
-#log { min-height: 40vh; }
-.msg { padding: 0.6rem 0; border-bottom: 1px solid var(--line); }
-.msg .head { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.15rem; }
-.msg .head .name { color: var(--ink); font-weight: 600; margin-right: 0.5rem; }
-.msg .text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.msg img { display: block; max-width: min(100%, 28rem); margin-top: 0.5rem; border: 1px solid var(--line); border-radius: 3px; }
-.msg.fuzzy .head .name { color: var(--accent); }
+/* chat (text-message style: you on the right, Fuzzy on the left; flat bubbles) */
+#log { min-height: 40vh; display: flex; flex-direction: column; gap: 0.25rem; padding: 0.5rem 0; }
+.msg { display: flex; flex-direction: column; max-width: min(78%, 34rem); }
+.msg.me { align-self: flex-end; align-items: flex-end; }
+.msg.fuzzy { align-self: flex-start; align-items: flex-start; }
+.bubble { padding: 0.5rem 0.8rem; border-radius: 1.15rem; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
+.msg.me .bubble { background: var(--accent); color: var(--accent-ink); border-bottom-right-radius: 0.3rem; }
+.msg.fuzzy .bubble { background: var(--soft); border: 1px solid var(--line); border-bottom-left-radius: 0.3rem; }
+.msg.pending .bubble { opacity: 0.65; }
+.stamp { font-size: 0.7rem; color: var(--muted); margin: 0.1rem 0.5rem 0.4rem; }
+.day { align-self: center; font-size: 0.75rem; color: var(--muted); margin: 0.8rem 0 0.4rem; }
+.bubble img { display: block; max-width: min(100%, 22rem); margin-top: 0.4rem; border-radius: 0.6rem; }
+.typing .bubble { display: flex; gap: 0.3rem; padding: 0.75rem 0.9rem; }
+.typing .dot { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--muted); opacity: 0.35; animation: blink 1.2s infinite; }
+.typing .dot:nth-child(2) { animation-delay: 0.2s; }
+.typing .dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%, 60%, 100% { opacity: 0.25; } 30% { opacity: 0.9; } }
+@media (prefers-reduced-motion: reduce) { .typing .dot { animation: none; opacity: 0.6; } }
 #composer { position: sticky; bottom: 0; background: var(--bg); padding: 0.75rem 0; border-top: 1px solid var(--line); }
-#composer textarea { min-height: 3.2rem; }
+#composer textarea { min-height: 3.2rem; border-radius: 1.1rem; }
 #status { min-height: 1.3rem; font-size: 0.85rem; color: var(--muted); }
 
 /* brain */

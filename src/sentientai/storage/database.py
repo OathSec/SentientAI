@@ -599,6 +599,19 @@ class ConversationRepository(_Repository[ConversationMessage]):
         )
         return list(reversed(records))
 
+    async def after(
+        self, user_id: str, since: datetime, *, limit: int = 100
+    ) -> builtins.list[ConversationMessage]:
+        """One person's messages newer than ``since``, oldest first."""
+
+        t = self.table
+        return await self._select(
+            select(t)
+            .where(and_(t.c.user_id == user_id, t.c.created_at > since))
+            .order_by(t.c.created_at.asc(), t.c.id.asc())
+            .limit(limit)
+        )
+
     async def count_since(self, when: datetime, *, role: str | None = None) -> int:
         t = self.table
         stmt = select(func.count()).select_from(t).where(t.c.created_at >= when)

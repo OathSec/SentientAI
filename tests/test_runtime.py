@@ -128,7 +128,7 @@ async def test_chat_end_to_end(runtime_factory: Any) -> None:
     assert "You are Fuzzy." in system and "## How you feel" in system and "awakening" in system
     # reflection produced an episode, a fact and a procedure
     # Reflection runs after the answer is delivered; wait for the task handle to fully finish.
-    await wait_for(lambda: not rt._running)
+    await wait_for(lambda: not rt._running and not rt._afterthoughts)
     assert brain.calls.get("reflect", 0) == 1
     assert await c.db.memories.find_by_subject("hardware.heavy_gpu")
     episodes = await c.memory.timeline()
