@@ -119,7 +119,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"   # reach an image server running on the host
     ports:
-      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:${SENTIENT_PORT:-8765}:8765"
 
   # HTTPS in front of the site (automatic certificates). Set SITE_ADDRESS (a domain name
   # pointing at this machine) in deploy/.env. Ports 80 and 443 must be reachable.

@@ -29,6 +29,7 @@ from sentientai.cognition.affect import AffectState
 from sentientai.cognition.social import Absence, Relationships
 from sentientai.config import MindConfig
 from sentientai.core.clock import Clock, SystemClock
+from sentientai.errors import ModelError
 from sentientai.models.embeddings import Embedder
 from sentientai.storage.database import Database
 from sentientai.storage.records import BeliefStatus, MemoryKind, UserRecord
@@ -198,7 +199,10 @@ class Interoception:
             return None
         if self._sameness_cache and self._sameness_cache[0] == texts:
             return self._sameness_cache[1]
-        raw = np.asarray(await self.embedder.embed(list(texts)), dtype=np.float64)
+        try:
+            raw = np.asarray(await self.embedder.embed(list(texts)), dtype=np.float64)
+        except ModelError:
+            return None  # the embedding server is down: sameness is unknown, not an error
         norms = np.linalg.norm(raw, axis=1, keepdims=True)
         vectors = raw / np.where(norms == 0, 1.0, norms)
         sims = [

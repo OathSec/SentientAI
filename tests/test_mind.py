@@ -779,3 +779,20 @@ async def test_it_can_make_its_world_bigger_when_it_decides_to(
     assert activity is not None and "bigger" in activity.outcome
     assert rt.c.world.size == 120
     assert rt.c.world.body.thought == "I need space to spread out."
+
+
+async def test_the_brain_still_loads_when_the_embedding_server_is_down(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    from sentientai.errors import ModelUnavailableError
+    from sentientai.storage.records import ActivityRecord
+
+    rt = await runtime_factory(Brain(), start=False)
+    for i in range(4):
+        await rt.c.db.activities.insert(ActivityRecord(kind="think", intent=f"idea {i}"))
+
+    async def down(texts: list[str]) -> Any:
+        raise ModelUnavailableError("embedding endpoint unreachable")
+
+    rt.c.interoception.embedder.embed = down  # type: ignore[method-assign]
+    assert (await rt.c.interoception.sense()).sameness is None
