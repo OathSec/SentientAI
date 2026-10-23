@@ -173,6 +173,15 @@ class OpenAICompatibleClient:
             calls, content = parse_tool_calls(str(content_raw), {t.name for t in request.tools})
 
         usage_raw = data.get("usage") or {}
+        log.info(
+            "llm call %s: %.1fs, %s prompt tokens, %s generated, %s chars of hidden reasoning%s",
+            self.name,
+            latency / 1000,
+            usage_raw.get("prompt_tokens", "?"),
+            usage_raw.get("completion_tokens", "?"),
+            len(str(reasoning or "")),
+            ", asked for tools" if request.tools else "",
+        )
         return ChatResponse(
             message=Message.assistant(content or None, calls),
             usage=Usage(
