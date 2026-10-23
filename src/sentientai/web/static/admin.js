@@ -7,8 +7,8 @@
   function say(text, kind) { notice(msg, text, kind); window.scrollTo(0, 0); }
   async function act(work) { try { await work(); } catch (e) { say(e.message, "error"); } }
 
-  const TABS = { users: "People", invites: "Invites", safety: "Safety", audit: "Audit log", memory: "Memory", tasks: "Tasks", server: "Server" };
-  const renderers = { users, invites, safety, audit, memory, tasks, server };
+  const TABS = { users: "People", safety: "Safety", audit: "Audit log", memory: "Memory", tasks: "Tasks", server: "Server" };
+  const renderers = { users, safety, audit, memory, tasks, server };
   let current = state.pending_approvals ? "safety" : "users", poll = null;
 
   function tabs() {
@@ -48,27 +48,6 @@
             if (!confirm("Erase " + u.display_name + " and everything private to them? This can't be undone.")) return;
             await api("/api/admin/users/" + u.id, { method: "DELETE" }); users();
           }) }, "Erase"))))))));
-  }
-
-  async function invites() {
-    const data = await api("/api/admin/invites");
-    const form = el("form", { class: "card" }, el("h2", {}, "New invite"),
-      el("label", { for: "iv-role" }, "Role"),
-      el("select", { id: "iv-role" }, el("option", { value: "user" }, "User"), el("option", { value: "admin" }, "Administrator")),
-      el("label", { class: "row small mt-xs" }, el("input", { type: "checkbox", id: "iv-teach" }), "Can teach Fuzzy"),
-      el("label", { for: "iv-days" }, "Valid for (days)"),
-      el("input", { id: "iv-days", type: "number", min: "1", max: "90", value: "7" }),
-      el("p", { class: "mt-s" }, el("button", { type: "submit" }, "Create invite")),
-      el("div", { id: "iv-out" }));
-    form.addEventListener("submit", (e) => { e.preventDefault(); act(async () => {
-      const r = await api("/api/admin/invites", { method: "POST", body: { role: $("iv-role").value, can_teach: $("iv-teach").checked, days: Number($("iv-days").value) } });
-      await invites();  // redraw the list first: it replaces the form, and the code must survive that
-      $("iv-out").append(el("p", { class: "notice" }, "Give them this code. It is shown once and works once: ", el("code", {}, r.code)));
-    }); });
-    clear(panel).append(form, el("div", { class: "card" }, el("h2", {}, "Invites"),
-      data.invites.length ? el("table", {}, el("thead", {}, el("tr", {}, ["Role", "Teaches", "Created", "Expires", "Used"].map((h) => el("th", {}, h)))),
-        el("tbody", {}, data.invites.map((i) => el("tr", {}, el("td", {}, i.role), el("td", {}, i.can_teach ? "yes" : "no"), el("td", {}, clock(i.created_at)), el("td", {}, clock(i.expires_at)), el("td", {}, i.used ? "yes" : "no")))))
-        : el("p", { class: "muted" }, "None yet.")));
   }
 
   async function safety() {
