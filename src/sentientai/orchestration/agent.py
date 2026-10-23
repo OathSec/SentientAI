@@ -282,7 +282,11 @@ class CognitiveAgent:
                 "task.started", task_id=task.id, goal=task.goal[:300], source=task.source.value
             )
             try:
-                await self._run(task, guard, outcome)
+                if task.kind == "chat":  # someone is waiting: the model is theirs first
+                    async with self.router.foreground():
+                        await self._run(task, guard, outcome)
+                else:
+                    await self._run(task, guard, outcome)
                 outcome.status = TaskStatus.SUCCEEDED
             except LoopBreakError as exc:
                 outcome.loop_break = exc.limit

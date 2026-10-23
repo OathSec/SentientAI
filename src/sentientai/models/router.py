@@ -16,7 +16,10 @@ down the router falls back to the other one.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
+from collections.abc import AsyncIterator
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from sentientai.config import RoutingConfig
@@ -35,6 +38,9 @@ from sentientai.models.types import (
 from sentientai.safety.limits import TokenBucket
 
 log = get_logger(__name__)
+
+# Set while a person is waiting on the answer (see ModelRouter.foreground).
+_FOREGROUND: ContextVar[bool] = ContextVar("foreground", default=False)
 
 
 class CircuitBreaker:
@@ -95,6 +101,34 @@ class ModelRouter:
             )
             for tier in clients
         }
+        # Conversations come first: while one is being answered, Fuzzy's own work (its beats,
+        # projects, reflections) holds its next model request, so the person gets the whole
+        # model; with nobody talking, its own thinking has all of it. (Measured on the 14B: a
+        # reply written at ~3.6 tok/s while a project ran beside it, ~30 tok/s alone.)
+        self._foreground = 0
+        self._idle = asyncio.Event()
+        self._idle.set()
+
+    @contextlib.asynccontextmanager
+    async def foreground(self) -> AsyncIterator[None]:
+        """Everything inside (and every task it starts) is a person waiting: it goes first."""
+
+        token = _FOREGROUND.set(True)
+        self._foreground += 1
+        self._idle.clear()
+        try:
+            yield
+        finally:
+            _FOREGROUND.reset(token)
+            self._foreground -= 1
+            if self._foreground == 0:
+                self._idle.set()
+
+    async def _yield_to_conversations(self) -> None:
+        if _FOREGROUND.get() or self._foreground == 0:
+            return
+        with contextlib.suppress(TimeoutError):  # never starve its own life completely
+            await asyncio.wait_for(self._idle.wait(), timeout=self.config.background_yield_s)
 
     def _available(self, tier: ModelTier) -> ModelTier:
         if tier in self.clients:
@@ -158,6 +192,7 @@ class ModelRouter:
         prefer: ModelTier | None = None,
         confidence: float | None = None,
     ) -> ChatResponse:
+        await self._yield_to_conversations()
         decision = self.select(kind, request, prefer=prefer, confidence=confidence)
         order = [decision.tier]
         if self.config.fallback_to_other_tier:

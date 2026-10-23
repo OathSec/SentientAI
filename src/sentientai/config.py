@@ -96,6 +96,12 @@ class RoutingConfig(BaseModel):
     fallback_to_other_tier: bool = True
     circuit_failure_threshold: int = Field(default=3, ge=1)
     circuit_cooldown_s: float = Field(default=60.0, ge=0)
+    background_yield_s: float = Field(
+        default=300.0,
+        ge=0,
+        description="While a conversation is being answered, Fuzzy's own work waits up to this "
+        "long before its next model request, so the person gets the whole model.",
+    )
     wait_for_model_s: float = Field(
         default=180.0,
         ge=0,

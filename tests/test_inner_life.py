@@ -333,3 +333,26 @@ async def test_a_loading_model_server_is_waited_for_not_an_error() -> None:
         with pytest.raises(ModelUnavailableError):
             await llm.chat(ChatRequest(messages=[Message.user("hi")]))
     await llm.aclose()
+
+
+async def test_a_conversation_gets_the_model_before_its_own_work() -> None:
+    import asyncio
+
+    from sentientai.models.scripted import ScriptedLLM
+
+    router = ModelRouter({ModelTier.HEAVY: ScriptedLLM(name="big", default="ok")}, RoutingConfig())
+    order: list[str] = []
+
+    async def own_work() -> None:
+        await asyncio.sleep(0.01)  # starts once someone is already being answered
+        await router.chat(ChatRequest(messages=[Message.user("a beat")]))
+        order.append("own work")
+
+    waiting = asyncio.create_task(own_work())
+    async with router.foreground():
+        await asyncio.sleep(0.05)
+        assert not waiting.done()  # holds its request while a person waits
+        await router.chat(ChatRequest(messages=[Message.user("their message")]))
+        order.append("reply")
+    await asyncio.wait_for(waiting, timeout=2)
+    assert order == ["reply", "own work"]  # and goes ahead as soon as the reply is done

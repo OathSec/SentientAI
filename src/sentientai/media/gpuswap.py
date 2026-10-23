@@ -83,7 +83,9 @@ class GpuSwap:
             self._borrowed += 1
             if await self.running():
                 log.info("pausing model server for an image", extra={"container": self.container})
-                if await self._call("/stop?t=15"):
+                # A model server keeps nothing to save on the way out; a long grace only adds to
+                # how long the picture (and, with one model, Fuzzy) waits.
+                if await self._call("/stop?t=3"):
                     self._stopped_by_us = True
         try:
             yield
