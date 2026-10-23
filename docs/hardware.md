@@ -73,6 +73,18 @@ docker compose -f deploy/docker-compose.yml --profile bigmodel up -d --build
 To go back, `--profile bigmodel down`, clear `HEAVY_URL`/`FAST_URL`, and bring `--profile models` up again.
 Anything with a GGUF and a chat template works; check each model's licence before running it on a public site.
 
+### Simplest and coolest: one 8B on the 2070 only
+
+Compose profile `single` runs just the embedding server and one model on the RTX 2070, and Fuzzy uses it for both
+tiers (two slots, so a conversation and its background work don't block each other). The 1660 Ti stays idle: less
+heat, no cross-card traffic, and none of the 16-series half-precision quirks. A 5 to 6 GB model such as a Llama 3.1 8B
+Q5_K_M leaves room for 16k of context. See `deploy/.env.example` (Alternative 1) for the settings.
+
+If the output ever turns to gibberish (a stream of repeated digits, for example), suspect the card or the cache type:
+set `KV_TYPE=f16`, and try the model on the other card to rule hardware in or out. Watch temperatures on the Brain
+page's System tab; a card that sits above roughly 83 C will throttle. Limiting board power usually costs little speed
+and lowers heat a lot: `sudo nvidia-smi -i <index> -pl 140` (the default for the 2070 is 175 W; it resets on reboot).
+
 ### Thinking models and latency
 
 Qwen3 models "think" before answering. That helps the quality of what Fuzzy decides, and it costs seconds.
