@@ -807,3 +807,49 @@ async def test_a_second_false_picture_claim_without_a_generator_is_replaced(
     rt = await runtime_factory(brain)
     reply = await rt.chat("s1", "generate me an image", timeout=10)
     assert reply.answer.startswith("I can't make pictures yet")
+
+
+@respx.mock
+async def test_a_not_ready_image_server_is_reported_and_nothing_is_paused(
+    sqlite_db: Database, tmp_path: Path
+) -> None:
+    from sentientai.media.gpuswap import GpuSwap
+    from sentientai.media.images import OpenAIImagesBackend
+
+    respx.get("http://imagegen:7861/health").mock(
+        return_value=httpx.Response(200, json={"ready": False, "error": None})
+    )
+    stop = respx.post(url__regex=r"http://docker/containers/.*/stop.*").mock(
+        return_value=httpx.Response(204)
+    )
+    config = ImagesConfig(backend="openai", base_url="http://imagegen:7861")
+    service = ImageService(
+        config,
+        sqlite_db,
+        tmp_path / "media",
+        audit=AuditLog(tmp_path / "audit", fsync=False),
+        backend=OpenAIImagesBackend(config),
+        swap=GpuSwap("llm", client=httpx.AsyncClient(base_url="http://docker")),
+    )
+    with pytest.raises(ImageError, match="still downloading"):
+        await service.create("a kite", user_id=None, public=True)
+    assert not stop.called  # the background model wasn't paused for nothing
+    await service.aclose()
+
+
+@respx.mock
+async def test_the_image_servers_own_reason_is_passed_on(
+    sqlite_db: Database, tmp_path: Path
+) -> None:
+    from sentientai.media.images import OpenAIImagesBackend
+
+    respx.get("http://imagegen:7861/health").mock(
+        return_value=httpx.Response(200, json={"ready": True})
+    )
+    respx.post("http://imagegen:7861/v1/images/generations").mock(
+        return_value=httpx.Response(500, json={"detail": "image worker failed: CUDA out of memory"})
+    )
+    config = ImagesConfig(backend="openai", base_url="http://imagegen:7861")
+    service = make_images(sqlite_db, tmp_path, OpenAIImagesBackend(config))
+    with pytest.raises(ImageError, match="the image server said: image worker failed: CUDA"):
+        await service.create("a kite", user_id=None, public=True)

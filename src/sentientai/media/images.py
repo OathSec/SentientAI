@@ -95,6 +95,18 @@ def _decode_b64(value: str) -> bytes:
         raise ImageError("the image server returned invalid data") from exc
 
 
+def _detail(response: httpx.Response) -> str:
+    """The server's own explanation (FastAPI-style ``detail``), else its status and text."""
+
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("detail"), str):
+        return str(data["detail"])[:300]
+    return f"error {response.status_code}: {response.text[:300]}"
+
+
 class ImageBackend(Protocol):
     name: str
 
@@ -120,7 +132,7 @@ class _HttpBackend:
         except httpx.HTTPError as exc:
             raise ImageError(f"image server unreachable: {exc}") from exc
         if response.status_code >= 400:
-            raise ImageError(f"image server error {response.status_code}: {response.text[:300]}")
+            raise ImageError(f"the image server said: {_detail(response)}")
         try:
             return response.json()
         except ValueError as exc:
@@ -152,6 +164,22 @@ class Automatic1111Backend(_HttpBackend):
 
 class OpenAIImagesBackend(_HttpBackend):
     name = "openai"
+
+    async def not_ready(self) -> str | None:
+        """Why the server can't draw yet, if it says so on /health (the bundled server does;
+        others just don't answer there and are assumed ready)."""
+
+        try:
+            response = await self.client.get("/health", timeout=10.0)
+            data = response.json() if response.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            return None
+        if isinstance(data, dict) and data.get("ready") is False:
+            return str(
+                data.get("error")
+                or "the image model is still downloading; it'll be ready in a few minutes"
+            )
+        return None
 
     async def generate(self, prompt: str, *, config: ImagesConfig) -> bytes:
         payload: dict[str, Any] = {
@@ -256,6 +284,10 @@ class ImageService:
 
     async def _draw(self, prompt: str) -> bytes:
         assert self.backend is not None
+        check = getattr(self.backend, "not_ready", None)
+        reason = await check() if check is not None else None
+        if reason:  # don't pause a model server for a picture that can't be made yet
+            raise ImageError(f"I can't make pictures just yet: {reason}")
         async with self._gpu:
             if self.swap is not None:
                 async with self.swap.borrow():
