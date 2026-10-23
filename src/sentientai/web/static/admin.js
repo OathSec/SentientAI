@@ -9,7 +9,7 @@
 
   const TABS = { users: "People", invites: "Invites", safety: "Safety", audit: "Audit log", memory: "Memory", tasks: "Tasks", server: "Server" };
   const renderers = { users, invites, safety, audit, memory, tasks, server };
-  let current = "users", poll = null;
+  let current = state.pending_approvals ? "safety" : "users", poll = null;
 
   function tabs() {
     const bar = clear($("tabs"));
@@ -87,7 +87,9 @@
           el("div", { class: "row" },
             el("button", { onclick: () => act(async () => { await api("/v1/approvals/" + a.id, { method: "POST", body: { approve: true } }); safety(); }) }, "Approve"),
             el("button", { class: "danger", onclick: () => act(async () => { await api("/v1/approvals/" + a.id, { method: "POST", body: { approve: false } }); safety(); }) }, "Deny")))))
-          : el("p", { class: "muted" }, "Nothing waiting.")));
+          : el("p", { class: "muted" }, "Nothing waiting."),
+        el("p", { class: "small muted" }, "Requests expire if nobody decides in time, and the step that asked fails. To let " + state.name + "'s own medium-risk actions (such as internet-connected code) run without asking, set AUTONOMOUS_AUTO_APPROVE=medium in deploy/.env.")));
+    showApprovals(approvals.length);
     clear(panel).append(box);
     poll = setInterval(() => { if (current === "safety") safety(); }, 10000);
   }
@@ -121,5 +123,5 @@
         el("td", {}, ["pending", "running"].includes(t.status) ? el("button", { class: "secondary", onclick: () => act(async () => { await api("/v1/tasks/" + t.id + "/cancel", { method: "POST" }); tasks(); }) }, "Cancel") : null)))))));
   }
 
-  open("users");
+  open(current);
 })();

@@ -86,7 +86,9 @@ function buildHeader(state) {
   const nav = el("nav");
   for (const [href, label, show] of NAV) {
     if (!show(state)) continue;
-    nav.append(el("a", { href, "aria-current": location.pathname === href ? "page" : null }, label));
+    const link = el("a", { href, "aria-current": location.pathname === href ? "page" : null }, label);
+    if (href === "/admin") link.append(el("span", { class: "badge hidden", id: "approvals-badge", title: "Waiting for your approval" }));
+    nav.append(link);
   }
   header.append(nav);
   if (state.signed_in && state.user) {
@@ -100,6 +102,22 @@ function buildHeader(state) {
 async function signOut() {
   try { await api("/api/auth/logout", { method: "POST" }); } catch (e) { /* already signed out */ }
   location.href = "/login";
+}
+
+/* Administrators: a count on the Admin link while Fuzzy waits for an approval. */
+function showApprovals(count) {
+  const badge = $("approvals-badge");
+  if (!badge) return;
+  badge.textContent = count ? String(count) : "";
+  badge.classList.toggle("hidden", !count);
+}
+function watchApprovals(state) {
+  if (!state.admin) return;
+  showApprovals(state.pending_approvals);
+  setInterval(async () => {
+    if (document.hidden) return;
+    try { showApprovals((await api("/api/auth/state")).pending_approvals); } catch (e) { /* next time */ }
+  }, 20000);
 }
 
 /* require: "user" (must be signed in), "any" (public pages allowed), "admin", "teacher" */
@@ -119,6 +137,7 @@ async function boot(require) {
   if (require === "admin" && !state.admin) { location.href = "/"; return null; }
   if (require === "teacher" && !(state.user && state.user.can_teach) && !state.admin) { location.href = "/"; return null; }
   buildHeader(state);
+  watchApprovals(state);
   return state;
 }
 

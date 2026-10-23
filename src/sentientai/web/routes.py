@@ -160,6 +160,8 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
             "csrf": p.session.csrf_token if p.session else None,
             "admin": p.admin,
             "operator": p.operator,
+            # Things Fuzzy is waiting on you for (only administrators can decide them).
+            "pending_approvals": len(await c.approvals.pending()) if p.admin else 0,
         }
 
     # ------------------------------------------------------------------ auth

@@ -66,6 +66,7 @@ header.top nav { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; flex: 1; }
 header.top nav a { color: var(--muted); text-decoration: none; padding: 0.1rem 0; }
 header.top nav a:hover { color: var(--ink); }
 header.top nav a[aria-current="page"] { color: var(--ink); border-bottom: 2px solid var(--accent); }
+header.top nav a .badge { display: inline-block; min-width: 1.2rem; margin-left: 0.3rem; padding: 0 0.35rem; border-radius: 0.6rem; background: var(--warn); color: var(--panel); font-size: 0.75rem; line-height: 1.2rem; text-align: center; }
 header.top .who { color: var(--muted); font-size: 0.85rem; }
 header.top button.link { background: none; border: 0; padding: 0; color: var(--muted); font: inherit; cursor: pointer; text-decoration: underline; }
 

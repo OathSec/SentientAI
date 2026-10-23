@@ -101,6 +101,8 @@ services:
       # internet (each such run is then medium risk, so self-started ones wait for your approval
       # on the Admin page unless you raise autonomous_auto_approve_max_risk). See docs/safety.md.
       SENTIENT_SANDBOX__NETWORK: ${SANDBOX_NETWORK:-false}
+      # Highest risk Fuzzy's own (self-started) actions may take without asking you: low | medium.
+      SENTIENT_SAFETY__AUTONOMOUS_AUTO_APPROVE_MAX_RISK: ${AUTONOMOUS_AUTO_APPROVE:-low}
       SENTIENT_SANDBOX__MEMORY: ${SANDBOX_MEMORY:-4g}
       SENTIENT_SANDBOX__CPUS: ${SANDBOX_CPUS:-4}
       SENTIENT_SANDBOX__TIMEOUT_S: ${SANDBOX_TIMEOUT_S:-600}

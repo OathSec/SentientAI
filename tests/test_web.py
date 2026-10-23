@@ -1150,3 +1150,17 @@ async def test_brain_shows_fuzzys_projects(web_factory: Any) -> None:
     assert shown["title"] == "a garden of glass flowers" and shown["sessions"] == 1
     assert shown["entries"][0]["text"] == "Made the first flower."
     assert shown["next_step"] == "Make five more."
+
+
+async def test_administrators_see_how_many_approvals_are_waiting(web_factory: Any) -> None:
+    from sentientai.config import RiskLevel
+    from sentientai.storage.records import ApprovalRecord
+
+    w = await web_factory()
+    await w.rt.c.db.approvals.insert(
+        ApprovalRecord(tool="sandbox_python", risk=RiskLevel.MEDIUM, autonomous=True)
+    )
+    _, admin, _ = await person(w, "root", role=UserRole.ADMIN)
+    _, alice, _ = await person(w, "alice")
+    assert (await admin.get("/api/auth/state")).json()["pending_approvals"] == 1
+    assert (await alice.get("/api/auth/state")).json()["pending_approvals"] == 0
