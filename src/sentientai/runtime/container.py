@@ -56,6 +56,8 @@ from sentientai.tools.sandbox import SandboxBackend, build_sandbox, sandbox_tool
 from sentientai.tools.self_tools import self_tools
 from sentientai.tools.web import WebClient, web_tools
 from sentientai.tools.world_tools import media_tools, world_tools
+from sentientai.workers.hub import WorkerHub
+from sentientai.workers.registry import WorkerRegistry
 from sentientai.world.service import World
 
 log = get_logger(__name__)
@@ -96,6 +98,8 @@ class Components:
     agency: Agency
     world: World
     images: ImageService
+    workers: WorkerHub
+    worker_registry: WorkerRegistry
     quotas: Quotas
     accounts: AccountService
     user_data: UserDataService
@@ -148,7 +152,9 @@ async def build_components(
         clock=clock,
     )
     policy = PolicyEngine(settings.safety)
-    router = build_router(settings, metrics=metrics, clients=clients, clock=clock)
+    worker_hub = WorkerHub()
+    worker_registry = WorkerRegistry(db.state, clock=clock)
+    router = build_router(settings, metrics=metrics, clients=clients, clock=clock, hub=worker_hub)
 
     memory = build_memory(settings, db, bus=bus, metrics=metrics, embedder=embedder, clock=clock)
     await memory.open()
@@ -241,6 +247,7 @@ async def build_components(
         bus=bus,
         clock=clock,
         backend=image_backend,
+        workers=worker_hub,
     )
     quotas = Quotas(db.usage, settings.accounts, clock=clock)
     accounts = AccountService(
@@ -349,6 +356,8 @@ async def build_components(
         agency=agency,
         world=world,
         images=images,
+        workers=worker_hub,
+        worker_registry=worker_registry,
         quotas=quotas,
         accounts=accounts,
         user_data=user_data,

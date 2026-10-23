@@ -29,3 +29,7 @@ htmlcov/
 
 # Local service artifacts
 dump.rdb
+worker/.buildenv/
+worker/build/
+worker/dist/
+worker/*.spec

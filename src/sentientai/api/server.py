@@ -38,6 +38,7 @@ from sentientai.storage.records import (
 from sentientai.web.pages import mount_pages
 from sentientai.web.routes import build_router
 from sentientai.web.security import BodyLimit, SecurityHeaders, WebAuth
+from sentientai.workers.api import build_worker_router
 
 
 class ChatIn(BaseModel):
@@ -112,7 +113,11 @@ def create_app(runtime: Runtime) -> FastAPI:
     app.add_middleware(
         BodyLimit,
         default=256_000,
-        large={"/api/teach/file": 52_000_000, "/v1/ingest": 2_000_000},
+        large={
+            "/api/teach/file": 52_000_000,
+            "/v1/ingest": 2_000_000,
+            "/worker/result": 24_000_000,
+        },
     )
     app.add_middleware(
         SecurityHeaders,
@@ -394,6 +399,17 @@ def create_app(runtime: Runtime) -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    # ------------------------------------------------------------- workers
+    app.include_router(build_worker_router(c.workers, c.worker_registry, c.audit))
+
+    @app.get("/v1/workers")
+    async def list_workers(_: Operator) -> dict[str, Any]:
+        records = await c.worker_registry.all()
+        return {
+            "registered": [r.public() for r in records],
+            "online": c.workers.online(),
+        }
 
     # ------------------------------------------------------------- web app
     app.include_router(build_router(runtime, web_auth))

@@ -31,6 +31,7 @@ from sentientai.media.gpuswap import GpuSwap
 from sentientai.safety.audit import AuditLog
 from sentientai.storage.database import Database
 from sentientai.storage.records import MediaRecord
+from sentientai.workers.hub import WorkerError, WorkerHub
 
 log = get_logger(__name__)
 
@@ -219,7 +220,9 @@ class ImageService:
         clock: Clock | None = None,
         backend: ImageBackend | None = None,
         swap: GpuSwap | None = None,
+        workers: WorkerHub | None = None,
     ) -> None:
+        self.workers = workers
         self.config = config
         self.db = db
         self.media_dir = media_dir
@@ -237,7 +240,9 @@ class ImageService:
 
     @property
     def available(self) -> bool:
-        return self.backend is not None
+        return self.backend is not None or (
+            self.workers is not None and self.workers.available("image", private_only=False)
+        )
 
     def path_for(self, record: MediaRecord) -> Path:
         path = Path(record.path).resolve()
@@ -254,7 +259,7 @@ class ImageService:
         caption: str = "",
         by: str = "agent",
     ) -> MediaRecord:
-        if self.backend is None:
+        if not self.available:
             raise ImageError("image generation isn't set up on this server")
         prompt = " ".join(prompt.split())[:1000]
         if len(prompt) < 3:
@@ -266,7 +271,7 @@ class ImageService:
         await self._emit("media.generating", prompt=prompt[:200], user_id=user_id)
         self._drawing[user_id] = self._drawing.get(user_id, 0) + 1
         try:
-            data = await self._draw(prompt)
+            data = await self._draw(prompt, public=public)
         finally:
             self._drawing[user_id] -= 1
             if not self._drawing[user_id]:
@@ -282,8 +287,38 @@ class ImageService:
 
         return bool(self._drawing.get(user_id))
 
-    async def _draw(self, prompt: str) -> bytes:
-        assert self.backend is not None
+    async def _from_worker(self, prompt: str, *, public: bool) -> bytes | None:
+        """A picture drawn on a connected PC, if one is free; None to draw it here.
+
+        Only Fuzzy's own public pictures may go to a friend's PC (``private_only=False``): a
+        private picture's prompt is a private conversation."""
+
+        if self.workers is None or not self.workers.available("image", private_only=not public):
+            return None
+        job = {
+            "prompt": prompt,
+            "negative_prompt": self.config.negative_prompt,
+            "width": self.config.width,
+            "height": self.config.height,
+            "steps": self.config.steps,
+        }
+        try:
+            result = await self.workers.run(
+                "image", job, private_only=not public, timeout=self.config.timeout_s
+            )
+            data = _decode_b64(str(result.get("b64_json") or ""))
+            sniff_image(data)  # a real picture, or it's drawn here instead
+            return data
+        except (WorkerError, ImageError) as exc:
+            log.warning("worker couldn't draw; drawing here", extra={"error": str(exc)})
+            return None
+
+    async def _draw(self, prompt: str, *, public: bool = False) -> bytes:
+        remote = await self._from_worker(prompt, public=public)
+        if remote is not None:
+            return remote
+        if self.backend is None:
+            raise ImageError("no computer is free to draw it right now")
         check = getattr(self.backend, "not_ready", None)
         reason = await check() if check is not None else None
         if reason:  # don't pause a model server for a picture that can't be made yet

@@ -957,6 +957,75 @@ def reset_mind_command(
     )
 
 
+# ----------------------------------------------------------------- workers
+workers_app = typer.Typer(
+    help="Computers that lend Fuzzy their power (see docs/workers.md).", no_args_is_help=True
+)
+app.add_typer(workers_app, name="workers")
+
+
+def _run_workers(work: Any) -> Any:
+    from sentientai.storage.database import Database
+    from sentientai.workers.registry import WorkerRegistry
+
+    async def go() -> Any:
+        db = Database(settings().storage.resolved_database_url())
+        try:
+            await db.create_all()
+            return await work(WorkerRegistry(db.state))
+        finally:
+            await db.close()
+
+    return asyncio.run(go())
+
+
+@workers_app.command("create")
+def workers_create(
+    name: str = typer.Argument(..., help="A name for the computer, e.g. owens-pc."),
+    private: bool = typer.Option(
+        False,
+        "--private",
+        help="Your OWN computer: it may run Fuzzy's thinking (private conversations included). "
+        "Without this, the computer only ever draws Fuzzy's public pictures.",
+    ),
+) -> None:
+    """Make a token for a computer. It is shown once: give it to whoever installs the program."""
+
+    async def work(registry: Any) -> Any:
+        return await registry.create(name, "private" if private else "shared")
+
+    record, token = _run_workers(work)
+    typer.echo(f"worker {record.name} ({record.trust}) created: {record.id}")
+    typer.echo("token (shown only now):")
+    typer.secho(token, fg="green")
+
+
+@workers_app.command("list")
+def workers_list() -> None:
+    async def work(registry: Any) -> Any:
+        return await registry.all()
+
+    for r in _run_workers(work):
+        seen = f"{r.last_seen_at:%Y-%m-%d %H:%M}" if r.last_seen_at else "never"
+        typer.echo(
+            f"{r.id}  {r.name:<20} {r.trust:<8} last seen {seen}"
+            + ("  REVOKED" if r.revoked else "")
+        )
+
+
+@workers_app.command("revoke")
+def workers_revoke(name_or_id: str) -> None:
+    """Stop a token from working. It disconnects at its next check-in."""
+
+    async def work(registry: Any) -> Any:
+        return await registry.revoke(name_or_id)
+
+    found = _run_workers(work)
+    if found is None:
+        _fail(f"no active worker named {name_or_id}")
+    typer.echo(f"revoked {found.name}")
+
+
 # ------------------------------------------------------------------ goals
 @goals_app.command("list")
 def goals_list() -> None:
