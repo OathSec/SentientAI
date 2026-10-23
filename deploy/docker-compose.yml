@@ -108,6 +108,9 @@ services:
       SENTIENT_SANDBOX__TIMEOUT_S: ${SANDBOX_TIMEOUT_S:-600}
       # With the `images` profile: pause this model server while a picture is made on its GPU.
       SENTIENT_IMAGES__SWAP_CONTAINER: ${IMAGE_SWAP_CONTAINER:-}
+      # How long after the last picture the paused server is started again. With one model on
+      # both cards (profile `bigmodel`) that model is Fuzzy's only one: keep it short (e.g. 5).
+      SENTIENT_IMAGES__SWAP_GRACE_S: ${IMAGE_SWAP_GRACE_S:-60}
       SENTIENT_IMAGES__TIMEOUT_S: ${IMAGE_TIMEOUT_S:-900}
       SENTIENT_SAFETY__AUDIT_HMAC_KEY: ${SENTIENT_AUDIT_KEY:?set SENTIENT_AUDIT_KEY in deploy/.env}
       # Where each tier's model server is. The defaults are the two servers below; for the
