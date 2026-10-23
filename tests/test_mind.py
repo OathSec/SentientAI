@@ -23,7 +23,7 @@ from sentientai.storage.records import (
     UserRecord,
     UserRole,
 )
-from tests.conftest import wait_for
+from tests.conftest import system_text, wait_for
 from tests.test_runtime import runtime_factory  # noqa: F401
 
 GOOD = "correct horse battery staple"
@@ -300,14 +300,14 @@ async def test_relationships_form_are_bounded_and_private(runtime_factory: Any) 
     assert rel.nickname == "Al" and rel.history
 
     await rt.chat("user:bob", "What do you think of Alice?", user=bob, timeout=10)
-    bob_prompt = brain.agent_requests[-1].messages[0].text
+    bob_prompt = system_text(brain.agent_requests[-1])
     for secret in ("warm and funny", "pineapple", "delighted", "Alice"):
         assert secret not in bob_prompt  # nothing about Alice reaches Bob's conversation
     assert "first conversation" in bob_prompt
     await wait_for(lambda: c.db.relationships.get(bob.id), timeout=10)
 
     await rt.chat("user:alice", "I'm back", user=alice, timeout=10)
-    alice_prompt = brain.agent_requests[-1].messages[0].text
+    alice_prompt = system_text(brain.agent_requests[-1])
     assert "What you think of them: Alice is warm and funny." in alice_prompt
     assert "you call them Al" in alice_prompt and "talked 2 times" in alice_prompt
     assert "Alice made me laugh" in alice_prompt  # her own private feeling is visible to her

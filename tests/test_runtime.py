@@ -25,7 +25,7 @@ from sentientai.storage.records import (
     TaskStatus,
 )
 from sentientai.tools.base import Tool, ToolArgs, ToolContext, ToolResult
-from tests.conftest import wait_for
+from tests.conftest import system_text, wait_for
 
 
 def make_settings(tmp_path: Path, **overrides: Any) -> Settings:
@@ -125,7 +125,7 @@ async def test_chat_end_to_end(runtime_factory: Any) -> None:
     stats = {s.tool: s for s in await c.db.tool_invocations.stats()}
     assert stats["fs_read"].calls == 1 and stats["fs_search"].calls == 1
     # identity, inner state and awareness framed the conversation
-    system = brain.agent_requests[0].messages[0].text
+    system = system_text(brain.agent_requests[0])
     assert "You are Fuzzy." in system and "## How you feel" in system and "awakening" in system
     # reflection produced an episode, a fact and a procedure
     # Reflection runs after the answer is delivered; wait for the task handle to fully finish.
@@ -292,7 +292,7 @@ async def test_restart_continuity_and_recovery(runtime_factory: Any, tmp_path: P
     assert recovered.status is TaskStatus.SUCCEEDED and recovered.attempts == 2
     hits = await rt2.c.memory.recall("when is the deploy window?", kinds=[MemoryKind.FACT])
     assert hits and "Friday" in hits[0].record.content  # vectors persisted to disk
-    assert "awakening #2" in brain2.agent_requests[0].messages[0].text
+    assert "awakening #2" in system_text(brain2.agent_requests[0])
     assert rt2.c.audit.verify().ok
 
 
@@ -497,9 +497,9 @@ async def test_a_conversation_is_told_to_keep_its_background_in_the_background(
     brain = Brain(["I'm good, thanks!"])
     rt = await runtime_factory(brain)
     await rt.chat("s1", "how are you?", timeout=10)
-    system = brain.agent_requests[0].messages[0].text
+    system = system_text(brain.agent_requests[0])
     assert "## Talking with someone" in system
     assert "doesn't recite their to-do list" in system
     task = await rt.submit("Summarise the notes")
     await rt.wait(task.id, timeout=10)
-    assert "## Talking with someone" not in brain.agent_requests[-1].messages[0].text
+    assert "## Talking with someone" not in system_text(brain.agent_requests[-1])

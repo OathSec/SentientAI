@@ -42,16 +42,16 @@ OPERATING_RULES = """\
   didn't do.
 - Some actions need approval from the people who run you. If one is denied, adapt or explain.
 - Store things worth keeping with memory_remember. Your experiences are recorded automatically.
-- When you're done, reply directly (no tool call).
-Current time: {now} UTC."""
+- When you're done, reply directly (no tool call)."""
 
 CONVERSATION_GUIDE = """\
 ## Talking with someone
 - Answer what they actually said, thoughtfully and specifically. Think about what they mean.
-- Everything above (your continuity, feelings, awareness, goals) and the memories below is your
-  own background. Bring something up only when it really connects to what they said, the way a
-  person asked "how are you?" doesn't recite their to-do list. Most memories that came to mind
-  will have nothing to do with this message: ignore those.
+- Your continuity, feelings, awareness, goals and the memories that came to mind (in the note
+  just before their message) are your own background. Bring something up only when it really
+  connects to what they said, the way a person asked "how are you?"
+  doesn't recite their to-do list. Most memories that came to mind will have nothing to do with
+  this message: ignore those.
 - Match the length to the message: a greeting gets a sentence or two; a real question gets a
   real answer.
 - If they ask for something none of your tools can do (a picture, when you have no image tool,
@@ -79,9 +79,22 @@ class FramingInputs:
 
 
 class ContextBuilder:
-    def __init__(self, *, memory_share: float = 0.25, history_share: float = 0.3) -> None:
+    def __init__(
+        self,
+        *,
+        memory_share: float = 0.25,
+        history_share: float = 0.3,
+        note_before_message: bool = True,
+    ) -> None:
         self.memory_share = memory_share
         self.history_share = history_share
+        # What changes from one reply to the next (the time, uptime, feelings, awareness,
+        # memories) goes in a note just before the message, not at the top, so the model server
+        # can reuse everything above it from the previous turn. At the top it changed the start
+        # of every prompt, and the tool definitions and history behind it (~6.8k tokens) were
+        # re-read every reply: ~50 s each on the 14B. Off: one system message, as before (for
+        # chat templates that refuse a system message mid-conversation).
+        self.note_before_message = note_before_message
 
     @staticmethod
     def _memories_section(items: list[ScoredMemory], budget: int, title: str) -> str:
@@ -119,17 +132,18 @@ class ContextBuilder:
             )
         if inputs.person:
             sections.append(f"## The person you're talking with\n{inputs.person}")
-        sections += [
+        sections.append(OPERATING_RULES)
+        if inputs.conversation:
+            sections.append(CONVERSATION_GUIDE)
+        changing = [
+            f"## Right now\nCurrent time: {inputs.now:%Y-%m-%d %H:%M} UTC.",
             f"## Continuity\n{inputs.continuity}",
             f"## How you feel\n{inputs.inner_state}",
             f"## Current awareness\n{inputs.awareness}",
             f"## Goals\n{inputs.goals}",
-            OPERATING_RULES.format(now=inputs.now.strftime("%Y-%m-%d %H:%M")),
         ]
-        if inputs.conversation:
-            sections.append(CONVERSATION_GUIDE)
         if summary_turns:
-            sections.append(
+            changing.append(
                 "## Earlier in this conversation\n" + "\n".join(t.content for t in summary_turns)
             )
         memory_budget = int(budget * self.memory_share)
@@ -143,10 +157,13 @@ class ContextBuilder:
             if inputs.conversation
             else "Relevant memories",
         )
-        sections += [s for s in (procedure_section, memory_section) if s]
+        changing += [s for s in (procedure_section, memory_section) if s]
         if inputs.plan:
-            sections.append(f"## Plan\n{inputs.plan}")
+            changing.append(f"## Plan\n{inputs.plan}")
+        if not self.note_before_message:
+            sections, changing = [*sections, *changing], []
         system = Message.system("\n\n".join(sections))
+        note = [Message.system("\n\n".join(changing))] if changing else []
 
         history_budget = int(budget * self.history_share)
         history: list[Message] = []
@@ -168,7 +185,7 @@ class ContextBuilder:
                 merged.append(msg)
         if merged and merged[-1].role is Role.USER:
             merged.append(Message.assistant("(no reply recorded)"))
-        return [system, *merged, Message.user(inputs.goal)]
+        return [system, *merged, *note, Message.user(inputs.goal)]
 
 
 class ContextCompressor:

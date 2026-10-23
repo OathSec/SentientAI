@@ -60,6 +60,12 @@ class ModelEndpointConfig(BaseModel):
     timeout_s: float = Field(default=900.0, gt=0)
     max_retries: int = Field(default=2, ge=0)
     supports_tools: bool = True
+    system_note_mid_conversation: bool = Field(
+        default=True,
+        description="Put what changes every reply (time, feelings, memories) in a system note "
+        "just before the message, so the server's prompt cache covers the rest (much faster). "
+        "Set false if the model's chat template refuses a system message mid-conversation.",
+    )
     device: str | None = Field(
         default=None, description="Informational placement, e.g. 'rocm:0-3'."
     )

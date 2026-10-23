@@ -271,8 +271,8 @@ def test_context_builder_structure_and_budget() -> None:
         for i in range(50)
     ]
     msgs = ContextBuilder().build(_inputs(history, memories), window=4096, reserve_output=1024)
-    system = msgs[0].text
-    assert msgs[0].role is Role.SYSTEM and "You are Test." in system and "## Plan" in system
+    system = "\n\n".join(m.text for m in msgs if m.role is Role.SYSTEM)
+    assert msgs[0].role is Role.SYSTEM and "You are Test." in msgs[0].text and "## Plan" in system
     assert "Earlier they discussed GPUs." in system and "## Relevant memories" in system
     assert system.count("fact ") < 50  # memory section respects its budget
     roles = [m.role for m in msgs[1:]]
@@ -304,3 +304,18 @@ async def test_context_compressor_keeps_tool_pairs() -> None:
 
     small = [Message.system("s"), Message.user("t")]
     assert await comp.fit(small, window=4000, reserve_output=500) == small
+
+
+def test_what_changes_every_reply_comes_last_so_the_prompt_cache_holds() -> None:
+    history = [Turn(role="user", content="hello"), Turn(role="assistant", content="hi there")]
+    first = ContextBuilder().build(_inputs(history, []), window=4096, reserve_output=1024)
+    later = _inputs(history, [])
+    later.now = later.now.replace(year=later.now.year + 1)
+    later.inner_state = "something else entirely"
+    second = ContextBuilder().build(later, window=4096, reserve_output=1024)
+    assert [m.text for m in first[:-2]] == [m.text for m in second[:-2]]  # same start: cached
+    assert first[-2].role is Role.SYSTEM and "## Right now" in first[-2].text
+    single = ContextBuilder(note_before_message=False).build(
+        _inputs(history, []), window=4096, reserve_output=1024
+    )
+    assert sum(m.role is Role.SYSTEM for m in single) == 1 and "## Right now" in single[0].text

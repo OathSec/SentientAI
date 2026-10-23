@@ -107,3 +107,9 @@ async def wait_for(predicate, timeout: float = 5.0, interval: float = 0.02) -> N
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError("condition not met before timeout")
         await asyncio.sleep(interval)
+
+
+def system_text(request) -> str:  # type: ignore[no-untyped-def]
+    """Everything Fuzzy is told besides the conversation itself (all system messages)."""
+
+    return "\n\n".join(m.text for m in request.messages if m.role.value == "system")

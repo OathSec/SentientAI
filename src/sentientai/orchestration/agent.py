@@ -251,7 +251,9 @@ class CognitiveAgent:
         self.kill_switch = kill_switch
         self.metrics = metrics
         self.clock = clock or SystemClock()
-        self.builder = ContextBuilder()
+        self.builder = ContextBuilder(
+            note_before_message=settings.models.heavy.system_note_mid_conversation
+        )
         self.compressor = ContextCompressor(router)
         self.planner = Planner(router, min_chars=settings.runtime.planning_min_chars)
         self.metacognition = Metacognition(
