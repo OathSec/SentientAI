@@ -66,6 +66,7 @@ class Metacognition:
         tool_failures: int,
         pressure: float,
         memory_coverage: float,
+        use_model: bool | None = None,
     ) -> Assessment:
         heuristic = self.heuristic(
             tool_calls=tool_calls,
@@ -73,7 +74,7 @@ class Metacognition:
             pressure=pressure,
             memory_coverage=memory_coverage,
         )
-        if not self.use_model or not answer.strip():
+        if not (self.use_model if use_model is None else use_model) or not answer.strip():
             return Assessment(heuristic if answer.strip() else 0.05, heuristic, None)
         try:
             response = await self.router.chat(

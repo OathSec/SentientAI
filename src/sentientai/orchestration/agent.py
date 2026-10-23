@@ -256,6 +256,8 @@ class CognitiveAgent:
         )
         self.compressor = ContextCompressor(router)
         self.planner = Planner(router, min_chars=settings.runtime.planning_min_chars)
+        models = settings.models
+        self._one_model = models.heavy.base_url.rstrip("/") == models.fast.base_url.rstrip("/")
         self.metacognition = Metacognition(
             router, escalate_below=settings.models.routing.escalate_below_confidence
         )
@@ -744,6 +746,9 @@ class CognitiveAgent:
             tool_failures=failures,
             pressure=guard.snapshot().pressure,
             memory_coverage=coverage,
+            # With one model behind both tiers there is nothing to escalate a reply to, so a
+            # conversation skips the extra model call (a person is waiting on it).
+            use_model=False if task.kind == "chat" and self._one_model else None,
         )
         await self.audit.record(
             "agent.assessment",

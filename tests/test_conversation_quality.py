@@ -125,3 +125,13 @@ async def test_a_visit_is_thought_about_once_it_pauses(runtime_factory: Any) -> 
         await rt.chat("s", text, user=alf, timeout=10)
     await wait_for(lambda: brain.calls.get("appraisal", 0) >= 1, timeout=5)
     assert brain.calls["appraisal"] == 1  # one look at the whole visit, not one per message
+
+
+async def test_one_model_for_both_tiers_skips_the_extra_rating_call(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    same = {"base_url": "http://llm-big:8000/v1"}
+    brain = Brain(["Hi!"])
+    rt = await runtime_factory(brain, models={"heavy": same, "fast": same})
+    reply = await rt.chat("s", "hello", timeout=10)
+    assert reply.answer == "Hi!" and brain.calls.get("assess", 0) == 0
