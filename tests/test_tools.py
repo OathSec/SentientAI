@@ -532,3 +532,16 @@ def test_invented_tool_tags_still_run_the_tool() -> None:
     # A tag that isn't a tool is just text.
     calls, visible = parse_tool_calls('<b>{"x": 1}</b>', known)
     assert calls == [] and "<b>" in visible
+
+
+def test_the_sandbox_tells_fuzzy_whether_its_code_can_reach_the_internet(tmp_path: Path) -> None:
+    from sentientai.config import SandboxConfig
+    from sentientai.tools.sandbox import SandboxPython
+
+    class Backend:
+        isolated = True
+
+    offline = SandboxPython(Backend(), SandboxConfig(), tmp_path)  # type: ignore[arg-type]
+    online = SandboxPython(Backend(), SandboxConfig(network=True), tmp_path)  # type: ignore[arg-type]
+    assert "no network" in offline.description
+    assert "internet access" in online.description and "no network" not in online.description

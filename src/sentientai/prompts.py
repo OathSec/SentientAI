@@ -177,6 +177,9 @@ Your goals:
 Your projects (things you're working on over many sittings, and where you left off):
 {projects}
 
+What you have:
+{possessions}
+
 What you could do now:
 {options}
 
@@ -281,11 +284,15 @@ You are at ({x:.1f}, {z:.1f}). {avatar}
 What is in your world:
 {objects}
 
+{pictures}
+
 What you want to do: {intent}
 
 Shapes: box (size [w,h,d]), sphere (radius), cylinder (radius, height), cone (radius, height),
-torus (radius, tube). Each part: {{"shape": ..., "color": "#rrggbb", "position": [x,y,z] relative
-to the object's centre on the ground, "rotation": [rx,ry,rz] in degrees, plus its size fields}}.
+torus (radius, tube), and picture: one of your own pictures from the list above on a thin panel
+(size [w,h,d], "media_id": its id, and "color" for the frame), which faces +z before rotation.
+Each part: {{"shape": ..., "color": "#rrggbb", "position": [x,y,z] relative to the object's centre
+on the ground, "rotation": [rx,ry,rz] in degrees, plus its size fields}}.
 Most things are under 5 m, but you can make big things too; at most {max_parts} parts each.
 
 Return ONLY JSON, one of:

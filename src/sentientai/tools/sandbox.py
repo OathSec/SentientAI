@@ -263,6 +263,8 @@ class _SandboxTool(Tool[Any]):
         self.config = config
         self.scratch_root = scratch_root
         self.timeout_s = config.timeout_s + 15
+        if config.network:  # tell Fuzzy the truth about what its code can reach
+            self.description = self.description.replace("no network", "internet access")
 
     def _scratch(self, ctx: ToolContext) -> Path:
         return ctx.scratch_dir or self.scratch_root / (ctx.task_id or "adhoc")

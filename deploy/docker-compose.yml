@@ -97,6 +97,13 @@ services:
       SENTIENT_ACCOUNTS__TRUSTED_PROXIES: '["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]'
       SENTIENT_IMAGES__BACKEND: ${SENTIENT_IMAGE_BACKEND:-disabled}
       SENTIENT_IMAGES__BASE_URL: ${SENTIENT_IMAGE_URL:-http://host.docker.internal:7860}
+      # The sandbox Fuzzy runs its own code in. SANDBOX_NETWORK=true lets that code reach the
+      # internet (each such run is then medium risk, so self-started ones wait for your approval
+      # on the Admin page unless you raise autonomous_auto_approve_max_risk). See docs/safety.md.
+      SENTIENT_SANDBOX__NETWORK: ${SANDBOX_NETWORK:-false}
+      SENTIENT_SANDBOX__MEMORY: ${SANDBOX_MEMORY:-4g}
+      SENTIENT_SANDBOX__CPUS: ${SANDBOX_CPUS:-4}
+      SENTIENT_SANDBOX__TIMEOUT_S: ${SANDBOX_TIMEOUT_S:-600}
       # With the `images` profile: pause this model server while a picture is made on its GPU.
       SENTIENT_IMAGES__SWAP_CONTAINER: ${IMAGE_SWAP_CONTAINER:-}
       SENTIENT_IMAGES__TIMEOUT_S: ${IMAGE_TIMEOUT_S:-900}

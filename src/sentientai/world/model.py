@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from sentientai.core.clock import utcnow
 
-Shape = Literal["box", "sphere", "cylinder", "cone", "torus"]
+Shape = Literal["box", "sphere", "cylinder", "cone", "torus", "picture"]
+_MEDIA_ID = re.compile(r"^img_[0-9a-z]{6,40}$")
 _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _NAMED = {
     "white": "#f2f2f2",
@@ -62,6 +63,15 @@ class Part(BaseModel):
     radius: float = 0.5
     height: float = 1.0
     tube: float = 0.1
+    # For a "picture": one of Fuzzy's own gallery images, shown on the front of a thin panel
+    # (size = width, height, depth); ``color`` is the frame.
+    media_id: str | None = None
+
+    @field_validator("media_id", mode="before")
+    @classmethod
+    def _media(cls, value: Any) -> str | None:
+        text = str(value or "").strip().strip("[]")
+        return text if _MEDIA_ID.match(text) else None
 
     @field_validator("color", mode="before")
     @classmethod
@@ -107,9 +117,14 @@ def clean_parts(raw: Any, max_parts: int) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         try:
-            parts.append(Part.model_validate(item).model_dump())
+            part = Part.model_validate(item)
         except ValidationError:
             continue
+        if part.shape == "picture" and part.media_id is None:
+            continue  # a picture needs a picture
+        if part.shape != "picture":
+            part.media_id = None
+        parts.append(part.model_dump(exclude_none=True))
         if len(parts) >= max_parts:
             break
     return parts

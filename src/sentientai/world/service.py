@@ -102,8 +102,13 @@ class World:
         objects = await self.objects()
         if not objects:
             return "Nothing yet: the ground is empty."
+
+        def shown(o: WorldObject) -> str:
+            ids = [str(p["media_id"]) for p in o.parts if p.get("shape") == "picture"]
+            return f" (showing your picture {', '.join(ids)})" if ids else ""
+
         return "\n".join(
-            f"- [{o.id}] {o.name} at ({o.x:.1f}, {o.z:.1f}), {len(o.parts)} parts"
+            f"- [{o.id}] {o.name} at ({o.x:.1f}, {o.z:.1f}), {len(o.parts)} parts{shown(o)}"
             + (f": {o.description[:400]}" if o.description else "")
             for o in objects
         )
@@ -112,6 +117,34 @@ class World:
         if not self.avatar.parts:
             return "You haven't designed how you look yet; you appear as a plain marker."
         return f"You look like this (your own design): {self.avatar.description}"
+
+    async def _own_pictures(self, parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep picture parts only if they show one of Fuzzy's own public gallery images:
+        a person's private picture never ends up on the public world page."""
+
+        kept = []
+        for part in parts:
+            if part.get("shape") == "picture":
+                record = await self.db.media.get(str(part.get("media_id")))
+                if record is None or not record.public or record.user_id is not None:
+                    continue
+            kept.append(part)
+        return kept
+
+    async def pictures(self, limit: int = 12) -> list[tuple[str, str]]:
+        """(id, caption) of Fuzzy's own gallery images, newest first."""
+
+        records = await self.db.media.visible_to(None, admin=False)
+        mine = [r for r in records if r.public and r.user_id is None]
+        return [(r.id, r.caption or r.prompt) for r in mine[:limit]]
+
+    async def describe_pictures(self) -> str:
+        pictures = await self.pictures()
+        if not pictures:
+            return "You haven't made any pictures yet."
+        return "Pictures you've made (in your gallery):\n" + "\n".join(
+            f"- [{pid}] {caption[:160]}" for pid, caption in pictures
+        )
 
     # ------------------------------------------------------------ changes
     async def build(
@@ -125,7 +158,7 @@ class World:
         description: str = "",
         by: str = "agent",
     ) -> WorldObject:
-        cleaned = clean_parts(parts, self.config.max_parts_per_object)
+        cleaned = await self._own_pictures(clean_parts(parts, self.config.max_parts_per_object))
         if not cleaned:
             raise WorldError("nothing to build: no valid parts")
         name = clean_text(name, 80) or "something"
@@ -171,7 +204,9 @@ class World:
             if description is not None:
                 obj.description = clean_text(description, 500)
             if parts is not None:
-                cleaned = clean_parts(parts, self.config.max_parts_per_object)
+                cleaned = await self._own_pictures(
+                    clean_parts(parts, self.config.max_parts_per_object)
+                )
                 if not cleaned:
                     raise WorldError("no valid parts given")
                 obj.parts = cleaned
@@ -198,7 +233,7 @@ class World:
         return obj
 
     async def design_avatar(self, description: str, parts: Any, *, by: str = "agent") -> Avatar:
-        cleaned = clean_parts(parts, self.config.max_parts_per_object)
+        cleaned = await self._own_pictures(clean_parts(parts, self.config.max_parts_per_object))
         if not cleaned:
             raise WorldError("an avatar needs at least one valid part")
         self.avatar = Avatar(

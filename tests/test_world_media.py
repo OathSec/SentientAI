@@ -616,3 +616,104 @@ def test_a_blank_swap_container_means_no_swapping() -> None:
     assert ImagesConfig(swap_container="sentientai-llm-fast-1").swap_container == (
         "sentientai-llm-fast-1"
     )
+
+
+async def test_fuzzy_can_hang_its_own_paintings_but_never_someones_private_picture(
+    sqlite_db: Database, tmp_path: Path
+) -> None:
+    from sentientai.storage.records import MediaRecord
+
+    mine = MediaRecord(prompt="a lighthouse at dusk", path="x", mime="image/png", public=True)
+    private = MediaRecord(prompt="for alice", path="y", mime="image/png", user_id="usr_alice")
+    await sqlite_db.media.insert(mine)
+    await sqlite_db.media.insert(private)
+    world, _ = make_world(sqlite_db, tmp_path)
+    assert f"[{mine.id}]" in await world.describe_pictures()
+    assert private.id not in await world.describe_pictures()
+
+    frame = {"shape": "box", "size": [3, 2, 0.2], "position": [0, 1, 0], "color": "#7a5230"}
+    painting = {
+        "shape": "picture",
+        "media_id": mine.id,
+        "size": [1.6, 1.0, 0.04],
+        "position": [0, 1.4, 0.12],
+        "color": "#d8c8a8",
+    }
+    wall = await world.build("gallery wall", [frame, painting], x=3, z=3)
+    shapes = [p["shape"] for p in wall.parts]
+    assert shapes == ["box", "picture"] and wall.parts[1]["media_id"] == mine.id
+    assert "media_id" not in wall.parts[0]
+    assert f"showing your picture {mine.id}" in await world.describe()
+
+    sneaky = {**painting, "media_id": private.id}
+    other = await world.build("another wall", [frame, sneaky], x=-3, z=3)
+    assert [p["shape"] for p in other.parts] == ["box"]  # the private picture was left out
+    with pytest.raises(WorldError):
+        await world.build("only a private picture", [sneaky])
+    unnamed = {k: v for k, v in painting.items() if k != "media_id"}
+    with pytest.raises(WorldError):
+        await world.build("a blank picture", [unnamed])
+
+
+async def test_when_it_builds_it_knows_what_pictures_it_has(runtime_factory: Any) -> None:  # noqa: F811
+    from sentientai.storage.records import MediaRecord
+
+    prompts_seen: list[str] = []
+
+    def act(request: Any) -> dict[str, Any]:
+        prompts_seen.append(request.messages[-1].text)
+        return {
+            "action": "build",
+            "name": "a frame by the door",
+            "x": 2,
+            "z": 2,
+            "parts": [
+                {"shape": "picture", "media_id": painting.id, "size": [1.2, 0.8, 0.05]},
+            ],
+            "note": "I wanted to see my lighthouse every day.",
+        }
+
+    painting = MediaRecord(prompt="a lighthouse", path="p", mime="image/png", public=True)
+    choose = {
+        "feelings": [],
+        "mood": "settled",
+        "choice": "build",
+        "intent": "do something with my world",
+        "why": "I wanted to",
+        "rest_minutes": 15,
+    }
+    rt = await runtime_factory(Brain(beat=choose, world=act), start=False)
+    await rt.c.db.media.insert(painting)
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and "built a frame by the door" in activity.outcome
+    assert f"[{painting.id}]" in prompts_seen[0] and "picture:" in prompts_seen[0]
+    [obj] = await rt.c.world.objects()
+    assert obj.parts[0]["media_id"] == painting.id
+
+
+async def test_when_it_chooses_what_to_do_it_sees_what_it_has(runtime_factory: Any) -> None:  # noqa: F811
+    from sentientai.storage.records import MediaRecord
+
+    seen: list[str] = []
+
+    def choose(request: Any) -> dict[str, Any]:
+        seen.append(request.messages[-1].text)
+        return {
+            "feelings": [],
+            "mood": "calm",
+            "choice": "rest",
+            "intent": "rest",
+            "rest_minutes": 5,
+        }
+
+    rt = await runtime_factory(Brain(beat=choose), start=False)
+    await rt.c.db.media.insert(
+        MediaRecord(
+            prompt="a lighthouse", caption="My lighthouse", path="p", mime="image/png", public=True
+        )
+    )
+    await rt.c.world.build("little hut", [{"shape": "box"}])
+    await rt.c.agency.beat()
+    assert "What you have:" in seen[0]
+    assert "1 things you built in it, most recently little hut" in seen[0]
+    assert "newest: My lighthouse" in seen[0]

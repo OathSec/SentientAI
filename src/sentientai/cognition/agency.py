@@ -381,6 +381,7 @@ class Agency:
             people="\n".join(known) or "- nobody yet",
             goals=GoalManager.render(await self.goals.active()),
             projects=ProjectBook.render(await self.projects.active()),
+            possessions=await self._possessions(),
             options="\n".join(f"- {k}: {DESCRIPTIONS[k]}" for k in options),
         )
         response = await self.router.chat(
@@ -434,6 +435,32 @@ class Agency:
             rest_s=rest_s,
             thinking=thinking,
         )
+
+    async def _possessions(self) -> str:
+        """What Fuzzy has made, so ideas that connect things (a painting on a wall it built,
+        a project about something it read) can occur to it."""
+
+        objects = await self.world.objects()
+        pictures = await self.world.pictures(limit=5)
+        lines = [
+            f"- your world: {self.world.size:.0f} m across (can grow to "
+            f"{self.world.config.max_size:.0f} m), {len(objects)} things you built in it"
+            + (
+                f", most recently {max(objects, key=lambda o: o.created_at).name}"
+                if objects
+                else ""
+            )
+        ]
+        if pictures:
+            lines.append(
+                f"- pictures you've made: {len(pictures)} recent ones in your gallery, newest: "
+                + "; ".join(caption[:80] for _, caption in pictures[:3])
+            )
+        else:
+            lines.append("- pictures you've made: none yet")
+        designed = bool(self.world.avatar.parts)
+        lines.append("- a body you designed" if designed else "- no body design of your own yet")
+        return "\n".join(lines)
 
     # -------------------------------------------------------------- doing
     async def _carry_out(
@@ -784,6 +811,7 @@ class Agency:
                 z=world.body.z,
                 avatar=world.describe_avatar(),
                 objects=await world.describe(),
+                pictures=await world.describe_pictures(),
                 intent=choice.intent,
                 max_parts=world.config.max_parts_per_object,
             ),

@@ -213,6 +213,11 @@ build, change, remove, walk or redesign its body are available only in Fuzzy's o
 conversation (not even an administrator's). People can look around and click objects; changes appear live. The ground starts at `world.size` metres across and Fuzzy can **expand** it (never shrink it) up to `world.max_size`;
 it is told its extents and that it can build anywhere, rebuild or remove anything it made, and walk wherever it
 wants. Whatever it does, its own words about it appear in the bubble over its head and on the side panel, in full.
+Its world can hold its own paintings: a `picture` part shows one of its gallery images on a thin panel (a canvas, a
+poster, a mural). When it acts in its world it sees what pictures it has, and every beat includes a short list of what
+it owns (its world, its recent pictures, its body), so connecting things, like hanging a painting in a house it built,
+can be its own idea. Only Fuzzy's own public gallery images can be hung; a picture made privately for someone never
+appears in the world.
 Limits: `world.max_objects`, `world.max_parts_per_object`, `world.size`, `world.max_size`.
 
 ## Self-improvement (`reflection/`)

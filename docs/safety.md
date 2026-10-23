@@ -81,6 +81,18 @@ for development only and escalates every execution to HIGH (approval required).
 daemon, which is root-equivalent on the host. Run SentientAI on a dedicated host or
 VM, or set `sandbox.backend: disabled`.
 
+### Internet access for Fuzzy's own code (opt-in)
+
+Fuzzy can always read the internet through its web tools (`web_search`, `web_fetch`, with private and local
+addresses blocked). Code it runs in the sandbox has **no network** unless you set `SANDBOX_NETWORK=true` in
+`deploy/.env` (or `sandbox.network: true`). With it on, that code can download, call APIs and reach the internet as
+your home connection, and it can also reach devices on your LAN: the sandbox uses Docker's default bridge network.
+Each such run is assessed as medium risk, so runs Fuzzy starts on its own wait for your approval on the Admin page;
+raising `safety.autonomous_auto_approve_max_risk` to `medium` removes that check. Turn it on knowing that an
+uncensored model can then do anything on the internet that a script can, from your IP address.
+`SANDBOX_MEMORY`, `SANDBOX_CPUS` and `SANDBOX_TIMEOUT_S` set how much of the machine its code may use (defaults 4 GB,
+4 CPUs, 10 minutes).
+
 ## Filesystem and network boundaries
 
 - File tools resolve every path (following symlinks) and refuse anything outside

@@ -57,10 +57,25 @@
       default: return new THREE.BoxGeometry(p.size[0], p.size[1], p.size[2]);
     }
   }
+  // Fuzzy's own paintings, shown on "picture" parts. Each image is loaded once and shared.
+  const textures = new Map();
+  function texture(id) {
+    if (!textures.has(id)) textures.set(id, new THREE.TextureLoader().load("/media/" + encodeURIComponent(id)));
+    return textures.get(id);
+  }
+  function makeMesh(p) {
+    if (p.shape === "picture" && p.media_id) {
+      const frame = new THREE.MeshLambertMaterial({ color: p.color });
+      const art = new THREE.MeshLambertMaterial({ map: texture(p.media_id) });
+      // Box faces: +x, -x, +y, -y, +z (the picture), -z.
+      return new THREE.Mesh(new THREE.BoxGeometry(p.size[0], p.size[1], Math.max(0.02, p.size[2])), [frame, frame, frame, frame, art, frame]);
+    }
+    return new THREE.Mesh(geometry(p), new THREE.MeshLambertMaterial({ color: p.color }));
+  }
   function build(parts) {
     const group = new THREE.Group();
     for (const p of parts) {
-      const mesh = new THREE.Mesh(geometry(p), new THREE.MeshLambertMaterial({ color: p.color }));
+      const mesh = makeMesh(p);
       mesh.position.set(p.position[0], p.position[1], p.position[2]);
       mesh.rotation.set(rad(p.rotation[0]), rad(p.rotation[1]), rad(p.rotation[2]));
       mesh.castShadow = true; mesh.receiveShadow = true;
@@ -72,7 +87,11 @@
     return group;
   }
   function dispose(node) {
-    node.traverse((n) => { if (n.geometry) n.geometry.dispose(); if (n.material) n.material.dispose(); });
+    // Shared picture textures are kept (another object may show the same painting).
+    node.traverse((n) => {
+      if (n.geometry) n.geometry.dispose();
+      for (const m of [].concat(n.material || [])) m.dispose();
+    });
   }
 
   // --------------------------------------------------------------- objects

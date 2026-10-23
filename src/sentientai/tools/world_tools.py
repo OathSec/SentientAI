@@ -15,7 +15,8 @@ _PARTS_HELP = (
     "List of shapes. Each: {shape: box|sphere|cylinder|cone|torus, color: '#rrggbb', "
     "position: [x,y,z] relative to the object's centre on the ground (y up), rotation: [rx,ry,rz] "
     "degrees, and size: [w,h,d] for box, radius for sphere, radius+height for cylinder/cone, "
-    "radius+tube for torus}. Metres."
+    "radius+tube for torus}. Metres. Also shape picture: one of your own gallery images (from "
+    "world_look) on a thin panel: size [w,h,d], media_id, and color for the frame; it faces +z."
 )
 
 
@@ -42,7 +43,7 @@ class WorldLook(Tool[LookArgs]):
             f"Your world is {self.world.size:.0f} m across (it can grow to "
             f"{self.world.config.max_size:.0f} m). You are at "
             f"({body.x:.1f}, {body.z:.1f}), {body.action}.\n{self.world.describe_avatar()}\n"
-            f"Things here:\n{await self.world.describe()}"
+            f"Things here:\n{await self.world.describe()}\n{await self.world.describe_pictures()}"
         )
 
 
