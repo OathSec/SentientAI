@@ -69,8 +69,13 @@ def main() -> None:
             requires_safety_checker=False,
             local_files_only=True,
         )
+        # Some models ship another multistep scheduler's settings (DreamShaper 8: DEIS, with
+        # algorithm_type "deis" / solver_type "logrho"), which DPM++ refuses; name its own.
         pipe.scheduler = DPMSolverMultistepScheduler.from_config(
-            pipe.scheduler.config, use_karras_sigmas=True
+            pipe.scheduler.config,
+            algorithm_type="dpmsolver++",
+            solver_type="midpoint",
+            use_karras_sigmas=True,
         )
         pipe.set_progress_bar_config(disable=True)
         return pipe

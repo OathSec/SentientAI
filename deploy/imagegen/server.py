@@ -141,8 +141,11 @@ async def generate(body: GenerateIn) -> dict[str, Any]:
             await proc.wait()
             raise HTTPException(status_code=504, detail="the picture took too long") from None
     if proc.returncode != 0:
+        print(err.decode(errors="replace"), file=sys.stderr, flush=True)  # the whole story, in the logs
         tail = err.decode(errors="replace").strip().splitlines()[-5:]
-        raise HTTPException(status_code=500, detail="image worker failed: " + " | ".join(tail))
+        # The error itself is the last line; it goes first, since callers keep only the start.
+        detail = "image worker failed: " + " | ".join([*tail[-1:], *tail[:-1]])
+        raise HTTPException(status_code=500, detail=detail)
     try:
         result = json.loads(out.decode().strip().splitlines()[-1])
     except (ValueError, IndexError):
