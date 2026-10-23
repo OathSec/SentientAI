@@ -431,7 +431,8 @@ class WorkersConfig(BaseModel):
     """Computers people lend to Fuzzy (see docs/workers.md)."""
 
     download_url: str = Field(
-        default="", description="Where people download the Windows program (shown on /compute)."
+        default="https://systembridge.site/downloads/FuzzyWorker.exe",
+        description="Where people download the Windows program (shown on /compute).",
     )
     max_per_person: int = Field(default=5, ge=0, description="Computers one account may link.")
     chat_model: str = Field(

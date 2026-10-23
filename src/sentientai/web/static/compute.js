@@ -95,6 +95,7 @@
     let d;
     try { d = await api("/api/compute"); } catch (e) { clear($("tiles")).append(el("p", { class: "notice error" }, e.message)); return; }
     lastDownload = d.download_url;
+    if (d.download_url) $("dl-win").href = d.download_url;
     const p = d.pool;
     clear($("tiles")).append(tile("computers online", p.online), tile("working now", p.busy), tile("jobs done for Fuzzy", p.jobs), tile("contributors", p.contributors), tile("home graphics cards", p.home_gpus.length));
 
