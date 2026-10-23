@@ -236,6 +236,7 @@ class Choice:
     rest_s: float
     thinking: str = ""  # what the model produced while deciding, kept for the Thinking tab
     project: str | None = None  # with "free": a project id to carry on, or "new"
+    promise: str | None = None  # an intention it is keeping (see cognition/intentions.py)
 
 
 class Agency:
@@ -335,6 +336,8 @@ class Agency:
         detail: dict[str, Any] = {"thinking": choice.thinking} if choice.thinking else {}
         if choice.goal_id:
             detail["goal_id"] = choice.goal_id
+        if choice.promise:
+            detail["intention_id"] = choice.promise
         activity = ActivityRecord(
             kind=choice.kind,
             intent=choice.intent,
@@ -358,6 +361,9 @@ class Agency:
             status, outcome = ActivityStatus.FAILED, f"something went wrong: {exc}"
         activity.status, activity.outcome = status, _prose(outcome, 40_000)
         activity.finished_at = self.clock.now()
+        handed_on = "task_id" in activity.detail or choice.kind in ("research", "pursue_goal")
+        if choice.promise and status is ActivityStatus.DONE and not handed_on:
+            await self.keep_promise(choice.promise, activity.outcome)
         await self.db.activities.finish(activity.id, status, activity.outcome, activity.finished_at)
         await self._publish_activity(activity)
         if self.world.body.target is None:  # don't interrupt a walk toward something it just built
@@ -584,6 +590,10 @@ class Agency:
         except (TypeError, ValueError):
             rest_s = 0.0
         rest_s = max(self.config.beat_min_s, min(self.config.beat_max_s, rest_s))
+        promised = _text(data.get("keeping_promise"), 80)
+        promise = next(
+            (i.id for i in await self.intentions.active() if promised and i.id in promised), None
+        )
         return Choice(
             kind=kind,
             intent=_text(data.get("intent"), 2000) or DESCRIPTIONS.get(kind, own),
@@ -593,6 +603,7 @@ class Agency:
             project=_text(data.get("project"), 200) or None,
             rest_s=rest_s,
             thinking=thinking,
+            promise=promise,
         )
 
     async def _on_mind(self) -> str:
@@ -813,6 +824,7 @@ class Agency:
                     person=None,
                     goal_id=None,
                     rest_s=choice.rest_s,
+                    promise=choice.promise,
                 )
                 notes.append(await self._do_free(own_task, activity, signals))
         if choice.person is None and did:  # the world page is public
@@ -944,12 +956,9 @@ class Agency:
             "(kind 'fact' for facts, 'reflection' for your own conclusions).",
             source=TaskSource.INTRINSIC,
             priority=3,
-            metadata={
-                "activity_id": activity.id,
-                "activity_kind": choice.kind,
-                "activity_intent": choice.intent,
-            },
+            metadata=self._task_metadata(choice, activity),
         )
+        activity.detail["task_id"] = task.id
         return f"Started looking into it (task {task.id})."
 
     async def _do_free(self, choice: Choice, activity: ActivityRecord, signals: BodySignals) -> str:
@@ -991,9 +1000,7 @@ class Agency:
             source=TaskSource.INTRINSIC,
             priority=3,
             metadata={
-                "activity_id": activity.id,
-                "activity_kind": choice.kind,
-                "activity_intent": choice.intent,
+                **self._task_metadata(choice, activity),
                 **({"project_id": project.id} if project is not None else {}),
             },
         )
@@ -1003,6 +1010,31 @@ class Agency:
             f"Started{where} (task {task.id}). What comes of it will be added here when it's "
             f"done.{note}"
         )
+
+    def _task_metadata(self, choice: Choice, activity: ActivityRecord) -> dict[str, Any]:
+        """What a task started by an activity carries, so its outcome comes back to it."""
+
+        return {
+            "activity_id": activity.id,
+            "activity_kind": choice.kind,
+            "activity_intent": choice.intent,
+            **({"intention_id": choice.promise} if choice.promise else {}),
+        }
+
+    async def keep_promise(self, intention_id: str, outcome: str) -> None:
+        """It did what it said it would. If it said so to someone, they find a note about it."""
+
+        kept = await self.intentions.resolve(intention_id, outcome)
+        if kept is None:
+            return
+        self.note(f"You did what you said you'd do: {kept.what}.")
+        if kept.user_id is None:
+            return
+        text = f"You asked me to {kept.what}. {_prose(outcome, 2000)}".strip()
+        await self.db.notes.insert(
+            NoteRecord(user_id=kept.user_id, content=text, created_at=self.clock.now())
+        )
+        await self.bus.publish("social.note", user_id=kept.user_id)
 
     async def record_project_session(self, project_id: str, intent: str, result: str) -> None:
         """After working on a project, Fuzzy writes its notebook entry in its own words."""
@@ -1225,14 +1257,7 @@ class Agency:
             return "I have no goals to work on."
         activity.detail["goal_id"] = goal.id
         # Linked to this activity, so how the work went is added to it when it finishes.
-        await self.pursue_goal(
-            goal.id,
-            metadata={
-                "activity_id": activity.id,
-                "activity_kind": choice.kind,
-                "activity_intent": choice.intent,
-            },
-        )
+        await self.pursue_goal(goal.id, metadata=self._task_metadata(choice, activity))
         return f"Started working on: {goal.description}. How it goes will be added here."
 
     async def _do_new_goal(

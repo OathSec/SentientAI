@@ -218,6 +218,7 @@ Return ONLY JSON:
   "why": "your reason, first person",
   "person": null | "their name, if your choice involves someone",
   "goal_id": null | "the goal id, if you choose pursue_goal",
+  "keeping_promise": null | "the [id] of something you said you'd do, if this is you doing it",
   "project": null | "a project id to carry on with" | "new",  (only with "free"; "new" starts a project named by your intent)
   "rest_minutes": number}}"""
 

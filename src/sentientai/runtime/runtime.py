@@ -741,6 +741,12 @@ class Runtime:
                 )
             except Exception:
                 log.exception("project notebook entry failed", extra={"task_id": task.id})
+        intention_id = task.metadata.get("intention_id")
+        if intention_id and outcome.status is TaskStatus.SUCCEEDED:
+            try:  # it did what it told someone it would: they hear about it
+                await c.agency.keep_promise(str(intention_id), outcome.answer or "")
+            except Exception:
+                log.exception("keeping a promise failed", extra={"task_id": task.id})
         activity_id = task.metadata.get("activity_id")
         if activity_id:  # an activity Fuzzy started on its own: show how it turned out
             result = (outcome.answer or outcome.error or "").strip()

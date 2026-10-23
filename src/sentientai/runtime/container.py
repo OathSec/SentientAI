@@ -222,8 +222,14 @@ async def build_components(
     )
     await interoception.load()
     redactor = Redactor(db)
+    intentions = Intentions(db.state, clock=clock)
     persona = Persona(
-        db, selfhood=selfhood, emotions=emotions, relationships=relationships, redactor=redactor
+        db,
+        selfhood=selfhood,
+        emotions=emotions,
+        relationships=relationships,
+        redactor=redactor,
+        intentions=intentions,
     )
     world = World(db, settings.world, audit=audit, bus=bus, clock=clock)
     await world.load()
@@ -242,7 +248,6 @@ async def build_components(
     )
     user_data = UserDataService(db, memory, audit=audit)
 
-    intentions = Intentions(db.state, clock=clock)
     registry = ToolRegistry()
     tools: list[Tool[Any]] = [
         *filesystem_tools(workspace),

@@ -76,6 +76,7 @@ class FramingInputs:
     beliefs: str = ""
     person: str | None = None
     conversation: bool = False
+    promises: str = ""  # what it told this person it would do, and whether it has
 
 
 class ContextBuilder:
@@ -142,6 +143,10 @@ class ContextBuilder:
             f"## Current awareness\n{inputs.awareness}",
             f"## Goals\n{inputs.goals}",
         ]
+        if inputs.promises:
+            changing.append(
+                "## What you told them you'd do (follow up honestly)\n" + inputs.promises
+            )
         if summary_turns:
             changing.append(
                 "## Earlier in this conversation\n" + "\n".join(t.content for t in summary_turns)

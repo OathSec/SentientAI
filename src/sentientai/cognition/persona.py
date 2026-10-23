@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sentientai.cognition.emotions import Emotions
+from sentientai.cognition.intentions import Intentions
 from sentientai.cognition.privacy import Redact, Redactor
 from sentientai.cognition.selfhood import SelfConcept
 from sentientai.cognition.social import Relationships
@@ -18,6 +19,7 @@ class Perspective:
     person: str | None
     feelings: str
     redact: Redact
+    promises: str = ""  # what it told this person it would do, and whether it has
 
 
 class Persona:
@@ -29,8 +31,10 @@ class Persona:
         emotions: Emotions,
         relationships: Relationships,
         redactor: Redactor,
+        intentions: Intentions | None = None,
     ) -> None:
         self.db = db
+        self.intentions = intentions
         self.selfhood = selfhood
         self.emotions = emotions
         self.relationships = relationships
@@ -48,6 +52,13 @@ class Persona:
         feelings = self.emotions.render(
             await self.emotions.current(scope), viewer=user_id, everything=privileged
         )
+        promises = ""
+        if user_id is not None and self.intentions is not None:
+            promises = self.intentions.render_for_person(await self.intentions.for_person(user_id))
         return Perspective(
-            beliefs=redact(beliefs), person=person, feelings=redact(feelings), redact=redact
+            beliefs=redact(beliefs),
+            person=person,
+            feelings=redact(feelings),
+            redact=redact,
+            promises=promises,
         )

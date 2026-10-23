@@ -10,7 +10,7 @@ from sentientai.cognition.social import _step
 from sentientai.evals.brain import Brain, call
 from sentientai.memory.consolidation import valid_fact
 from sentientai.orchestration.agent import claims_picture, tidy_reply
-from tests.conftest import wait_for
+from tests.conftest import system_text, wait_for
 from tests.test_mind import beat, make_user
 from tests.test_runtime import runtime_factory  # noqa: F401
 
@@ -135,3 +135,57 @@ async def test_one_model_for_both_tiers_skips_the_extra_rating_call(
     rt = await runtime_factory(brain, models={"heavy": same, "fast": same})
     reply = await rt.chat("s", "hello", timeout=10)
     assert reply.answer == "Hi!" and brain.calls.get("assess", 0) == 0
+
+
+async def test_its_own_work_does_not_stop_at_now_i_will(runtime_factory: Any) -> None:  # noqa: F811
+    from sentientai.storage.records import TaskSource
+
+    brain = Brain(
+        [
+            "I saved the list. Now, I will analyze it further using computational tools.",
+            "I counted 370,105 words; most are nouns.",
+        ]
+    )
+    rt = await runtime_factory(brain)
+    task = await rt.submit("Analyze the word list", source=TaskSource.INTRINSIC)
+    done = await rt.wait(task.id, timeout=10)
+    assert done.result == "I counted 370,105 words; most are nouns."
+    assert "your work ends when you stop" in brain.agent_requests[1].messages[-1].text
+
+
+async def test_a_kept_promise_reaches_the_person_and_the_next_chat(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    brain = Brain(["Hi Owen! I haven't built it yet, but I will."])
+    rt = await runtime_factory(brain)
+    owen = await make_user(rt, "Owen")
+    intention = await rt.c.agency.intentions.add(
+        "build a house in my world", for_whom="Owen", user_id=owen.id
+    )
+    await rt.chat("s", "hi", user=owen, timeout=10)
+    assert "You said you'd build a house in my world" in system_text(brain.agent_requests[0])
+    assert "not done yet" in system_text(brain.agent_requests[0])
+    await rt.c.agency.keep_promise(intention.id, "I built a small house with a red roof.")
+    [note] = await rt.c.db.notes.for_user(owen.id)
+    assert note.content.startswith("You asked me to build a house in my world.")
+    assert "red roof" in note.content
+    assert not await rt.c.agency.intentions.active()
+    persp = await rt.c.persona.perspective(owen.id, privileged=False)
+    assert "You said you'd build a house in my world, and did" in persp.promises
+
+
+async def test_a_beat_can_say_which_promise_it_is_keeping(runtime_factory: Any) -> None:  # noqa: F811
+    rt = await runtime_factory(Brain(), start=False)
+    owen = await make_user(rt, "Owen")
+    intention = await rt.c.agency.intentions.add(
+        "write about the sea", for_whom="Owen", user_id=owen.id
+    )
+    brain = Brain(
+        beat=beat("journal", "write about the sea", keeping_promise=f"[{intention.id}]"),
+        journal={"title": "The sea", "entry": "Grey, endless, and kind."},
+    )
+    rt.c.router.clients = {tier: brain.llm(tier.value) for tier in rt.c.router.clients}
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and activity.detail["intention_id"] == intention.id
+    [note] = await rt.c.db.notes.for_user(owen.id)
+    assert "Grey, endless, and kind." in note.content

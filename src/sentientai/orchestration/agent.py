@@ -134,11 +134,14 @@ _CLAIMS = (
         "taught, or note it with plan_later and say you'll read it in your own time.",
     ),
 )
-# "Let me show you some examples." and nothing else: a promise with nothing delivered.
+# "Let me show you some examples." or "Now, I will analyze the list." as the last words: a
+# promise with nothing after it.
 _PROMISE = re.compile(
-    r"(?:^|[.!?]\s+)(?:let me|i will now|i'll now|i will|i'll|i am going to|i'm going to|"
-    r"i'll go ahead and)\s+[^.!?\n]{0,60}?\b(?:show|share|demonstrate|begin|start|give|write|"
-    r"provide|explain|list|tell|walk you through)\b[^.!?\n]{0,80}[.!?:]?\s*$",
+    r"(?:^|[.!?]\s+)(?:(?:now|next|then),?\s+)?(?:let me|i will now|i'll now|i will|i'll|"
+    r"i am going to|i'm going to|i'll go ahead and)\s+[^.!?\n]{0,60}?\b(?:show|share|"
+    r"demonstrate|begin|start|give|write|provide|explain|list|tell|walk you through|analy[sz]e|"
+    r"look into|look up|search|research|check|read|explore|categori[sz]e|download|run|test|"
+    r"build|make|create|find)\b[^.!?\n]{0,120}[.!?:]?\s*$",
     re.IGNORECASE,
 )
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
@@ -407,6 +410,7 @@ class CognitiveAgent:
                 beliefs=perspective.beliefs if perspective else "",
                 person=perspective.person if perspective else None,
                 conversation=task.kind == "chat",
+                promises=perspective.promises if perspective else "",
             ),
             window=window,
             reserve_output=reserve,
@@ -701,19 +705,20 @@ class CognitiveAgent:
                     )
                 )
                 continue
-            if (
-                conversation
-                and not promised
-                and not used
-                and len(answer) < 400
-                and _PROMISE.search(answer)
-            ):
-                # "Let me show you some examples." and nothing more: it promised and stopped.
+            in_chat = conversation and not used and len(answer) < 400
+            if not promised and (in_chat or not conversation) and _PROMISE.search(answer):
+                # "Let me show you some examples." / "Now, I will analyze the list." and nothing
+                # more: it promised and stopped (a task ends as soon as it stops calling tools).
                 promised = True
                 outcome.transcript.append(
                     Message.user(
                         "You said you would, but your reply stops there. Do it now, in this "
-                        f"reply: write the actual thing itself.{asked}"
+                        "reply: write the actual thing itself. If it can only happen later, "
+                        f"note it with plan_later and say so honestly.{asked}"
+                        if conversation
+                        else "You ended by saying what you'll do next, but your work ends when "
+                        "you stop. Do it now with your tools, then finish by saying what came "
+                        f"of it.{asked}"
                     )
                 )
                 continue
