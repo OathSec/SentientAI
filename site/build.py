@@ -11,6 +11,7 @@ from pathlib import Path
 HERE = Path(__file__).parent
 OUT = HERE.parent / "site-build"
 EXE = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+LINUX = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 FUZZY = "https://entertainment.systembridge.site"
 
 NAV = [("/", "Home"), ("/about/", "About"), ("/worker/", "Fuzzy Worker"), ("/privacy/", "Privacy")]
@@ -232,11 +233,28 @@ def worker_body() -> str:
         else '<span class="btn disabled">Coming soon</span>'
     )
     check = (
-        f'<p class="small muted">Version 1.0.0 · {size} · Windows 10/11, 64-bit<br>'
+        f'<p class="small muted">Windows 10/11, 64-bit · {size}<br>'
         f'SHA-256: <code class="hash">{digest}</code></p>'
         if digest
         else ""
     )
+    others = ""
+    if LINUX and LINUX.is_file():
+        data = LINUX.read_bytes()
+        others += (
+            '<div class="card"><h3>Linux</h3><p>64-bit, any recent distribution with a desktop. '
+            'After downloading: <code>chmod +x FuzzyWorker-linux &amp;&amp; ./FuzzyWorker-linux</code>. '
+            'Installing Ollama needs one terminal command (the program tells you which).</p>'
+            '<p><a class="btn small" href="/downloads/FuzzyWorker-linux" download>Download for Linux</a></p>'
+            f'<p class="small muted">{len(data) / 1_048_576:.0f} MB · SHA-256: <code class="hash">{hashlib.sha256(data).hexdigest()}</code></p></div>'
+        )
+    others += (
+        '<div class="card"><h3>macOS</h3><p>Apple Silicon Macs (M1 or newer). The app is built by our '
+        'automatic build; the first version is still being prepared and signed off, so it is not '
+        'on this page yet.</p><p><span class="btn small disabled">Coming soon</span></p></div>'
+    )
+    downloads = f'<section class="wrap block"><h2>Other computers</h2><div class="cards">{others}</div></section>'
+
     return f"""
 <section class="hero short"><div class="wrap">
   <p class="eyebrow">FUZZY WORKER</p>
@@ -245,6 +263,7 @@ def worker_body() -> str:
   <div class="cta">{button}</div>
   {check}
 </div></section>
+{downloads}
 
 {LIVE}
 <section class="wrap block">
@@ -342,9 +361,11 @@ def main() -> None:
     page("/about/", "About Project Fuzzy", "Why SystemBridge is building Fuzzy: an AI with its own memory, feelings and choices, and an honest look at what that does and doesn't mean.", ABOUT)
     page("/worker/", "Fuzzy Worker: lend your GPU to Fuzzy", "A small Windows program that lets Fuzzy use your idle graphics card to think in the background. You stay in control.", worker_body())
     page("/privacy/", "Privacy: Project Fuzzy", "What Project Fuzzy stores, who can see it, and what Fuzzy Worker shares.", PRIVACY)
+    (OUT / "downloads").mkdir(exist_ok=True)
     if EXE and EXE.is_file():
-        (OUT / "downloads").mkdir()
         shutil.copy(EXE, OUT / "downloads" / "FuzzyWorker.exe")
+    if LINUX and LINUX.is_file():
+        shutil.copy(LINUX, OUT / "downloads" / "FuzzyWorker-linux")
     print("built", sum(1 for _ in OUT.rglob("*") if _.is_file()), "files")
 
 
