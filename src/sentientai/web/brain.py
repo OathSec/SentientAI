@@ -34,6 +34,7 @@ _PUBLIC_FIELDS: dict[str, tuple[str, ...]] = {
     "mind.thought": ("thought", "user_id"),
     "mind.feeling": ("emotion", "intensity", "valence", "cause", "user_id"),
     "mind.activity": ("id", "kind", "intent", "reason", "outcome", "status", "user_id"),
+    "mind.project": ("op", "id", "title", "status", "entry", "user_id"),
     "self.belief_formed": ("aspect", "value"),
     "self.belief_considering": ("aspect", "value"),
     "self.belief_revised": ("aspect", "value", "reasoning"),
@@ -183,6 +184,31 @@ class BrainView:
                 "by_kind": mem_stats["active_by_kind"],
             },
             "body": {"action": body.action, "thought": redact(body.thought)},
+            "projects": [
+                {
+                    "id": p.id,
+                    "title": redact(p.title),
+                    "why": redact(p.why),
+                    "status": p.status,
+                    "summary": redact(p.summary),
+                    "next_step": redact(p.next_step),
+                    "sessions": p.sessions,
+                    "started": p.created_at.isoformat(),
+                    "updated": p.updated_at.isoformat(),
+                    "entries": [
+                        {
+                            "at": e.at.isoformat(),
+                            "text": redact(e.text),
+                            "next": redact(e.next_step),
+                        }
+                        for e in reversed(p.entries[-15:])
+                    ],
+                }
+                for p in sorted(
+                    await c.agency.projects.all(),
+                    key=lambda p: (p.status not in ("active", "paused"), -p.updated_at.timestamp()),
+                )[:20]
+            ],
             "world": {
                 "size": c.world.size,
                 "max_size": c.world.config.max_size,

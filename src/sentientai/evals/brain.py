@@ -28,6 +28,7 @@ _PROMPTS = {
     "you're thinking of leaving a note": "note",
     "You have a small world of your own": "world",
     "You decided to walk because": "walk",
+    "You just spent some time on your project": "project_entry",
     "thinking privately about whether to change": "deliberate",
 }
 _DEFAULTS: dict[str, Any] = {
@@ -58,6 +59,12 @@ _DEFAULTS: dict[str, Any] = {
     "note": {"note": None},
     "world": {},
     "walk": {"x": 0, "z": 0, "note": None},
+    "project_entry": {
+        "entry": "I worked on it.",
+        "next_step": "",
+        "summary": "",
+        "status": "active",
+    },
     "deliberate": {"decision": "keep", "reasoning": "I still feel the same.", "confidence": 0.8},
 }
 

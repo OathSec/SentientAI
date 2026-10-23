@@ -19,6 +19,7 @@
     <button role="tab" data-tab="now" aria-selected="true">Right now</button>
     <button role="tab" data-tab="self" aria-selected="false">Self</button>
     <button role="tab" data-tab="doing" aria-selected="false">Doing</button>
+    <button role="tab" data-tab="projects" aria-selected="false">Projects</button>
     <button role="tab" data-tab="thinking" aria-selected="false">Thinking</button>
     <button role="tab" data-tab="memory" aria-selected="false">Memory</button>
     <button role="tab" data-tab="live" aria-selected="false">Live</button>
@@ -44,6 +45,11 @@
 
   <section class="panel hidden" data-panel="doing">
     <div class="card"><h2>What it has been doing</h2><div id="activities"></div></div>
+  </section>
+
+  <section class="panel hidden" data-panel="projects">
+    <p class="small muted">Things it chose to work on over many sittings, and the notebook it keeps for each, in its own words.</p>
+    <div id="projects"></div>
   </section>
 
   <section class="panel hidden" data-panel="thinking">

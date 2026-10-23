@@ -876,3 +876,67 @@ def test_reasoning_before_a_lone_closing_think_tag_is_not_shown() -> None:
 
     visible, thoughts = strip_reasoning("Let me think about this...\n</think>\nHi there!")
     assert visible == "Hi there!" and thoughts and "Let me think" in thoughts
+
+
+async def test_a_project_carries_on_across_sessions_with_a_notebook(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    from sentientai.orchestration.agent import TaskOutcome
+    from sentientai.storage.records import TaskStatus
+
+    seen_beats: list[str] = []
+
+    def beats(request: Any) -> dict[str, Any]:
+        seen_beats.append(request.messages[-1].text)
+        if len(seen_beats) == 1:
+            return beat("free", "build a lighthouse on the east edge", project="new")
+        return beat("free", "add a light to the lighthouse", project="lighthouse")
+
+    brain = Brain(
+        beat=beats,
+        project_entry={
+            "entry": "I built the tower from three cylinders.",
+            "next_step": "Put a light on top.",
+            "summary": "A lighthouse on the east edge: the tower is up.",
+            "status": "active",
+        },
+    )
+    rt = await runtime_factory(brain, start=False)
+    c = rt.c
+
+    first, _ = await c.agency.beat()
+    assert first is not None and "on my project" in first.outcome
+    [project] = await c.agency.projects.active()
+    assert project.title == "build a lighthouse on the east edge"
+    [task] = await c.db.tasks.list()
+    assert task.metadata["project_id"] == project.id
+    await rt._after_task(
+        task,
+        TaskOutcome(task_id=task.id, status=TaskStatus.SUCCEEDED, answer="Built the tower."),
+    )
+    project = await c.agency.projects.get(project.id)
+    assert project is not None and project.sessions == 1
+    assert project.entries[-1].text == "I built the tower from three cylinders."
+    assert project.next_step == "Put a light on top."
+
+    second, _ = await c.agency.beat()  # the next choice sees where it left off...
+    assert "Next, you wanted to: Put a light on top." in seen_beats[1]
+    assert second is not None and "on my project" in second.outcome
+    newest = await c.db.tasks.get(second.detail["task_id"])
+    assert newest is not None
+    # ...and the working session gets the notebook.
+    assert "I built the tower from three cylinders." in newest.goal
+    assert newest.metadata["project_id"] == project.id
+    memories = await c.db.memories.list(kinds=[MemoryKind.REFLECTION], scope=Scope())
+    assert any("lighthouse" in m.content for m in memories)
+
+
+async def test_fuzzy_can_only_hold_so_many_projects(runtime_factory: Any) -> None:  # noqa: F811
+    rt = await runtime_factory(Brain(), start=False, mind={"max_active_projects": 2})
+    book = rt.c.agency.projects
+    assert await book.start("one") is not None
+    assert await book.start("two") is not None
+    assert await book.start("three") is None
+    [first, _] = await book.active()
+    await book.write(first.id, entry="Finished it.", status="done")
+    assert await book.start("three") is not None

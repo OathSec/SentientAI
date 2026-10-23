@@ -339,6 +339,9 @@ class MindConfig(BaseModel):
         description="Starting guess for how often people visit; Fuzzy's experience replaces it.",
     )
     notes_per_person_per_day: int = Field(default=1, ge=0)
+    max_active_projects: int = Field(
+        default=5, ge=1, description="Long-running projects of its own it keeps going at once."
+    )
     activities: list[str] = Field(
         default_factory=lambda: [
             "think",

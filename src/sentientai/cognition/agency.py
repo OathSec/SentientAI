@@ -28,6 +28,7 @@ from sentientai.cognition.emotions import Emotions
 from sentientai.cognition.goals import GoalManager
 from sentientai.cognition.interoception import BodySignals, Interoception
 from sentientai.cognition.privacy import Redactor
+from sentientai.cognition.projects import Project, ProjectBook
 from sentientai.cognition.self_model import SelfModel, humanize_duration
 from sentientai.cognition.selfhood import SelfConcept
 from sentientai.cognition.social import Relationships, describe_scale
@@ -124,6 +125,7 @@ class Choice:
     goal_id: str | None
     rest_s: float
     thinking: str = ""  # what the model produced while deciding, kept for the Thinking tab
+    project: str | None = None  # with "free": a project id to carry on, or "new"
 
 
 class Agency:
@@ -165,6 +167,9 @@ class Agency:
         self.bus = bus
         self.clock = clock or SystemClock()
         self._happenings: deque[str] = deque(maxlen=30)
+        self.projects = ProjectBook(
+            db.state, bus=bus, clock=self.clock, max_active=settings.mind.max_active_projects
+        )
         # Set by the runtime: start a background task / work on a goal.
         self.submit_task: Callable[..., Awaitable[Any]] | None = None
         self.pursue_goal: Callable[[str], Awaitable[None]] | None = None
@@ -375,6 +380,7 @@ class Agency:
             or "- nothing yet: this is your first time to yourself",
             people="\n".join(known) or "- nobody yet",
             goals=GoalManager.render(await self.goals.active()),
+            projects=ProjectBook.render(await self.projects.active()),
             options="\n".join(f"- {k}: {DESCRIPTIONS[k]}" for k in options),
         )
         response = await self.router.chat(
@@ -424,6 +430,7 @@ class Agency:
             why=_text(data.get("why"), 4000),
             person=person,
             goal_id=_text(data.get("goal_id"), 48) or None,
+            project=_text(data.get("project"), 200) or None,
             rest_s=rest_s,
             thinking=thinking,
         )
@@ -639,12 +646,32 @@ class Agency:
 
         Nothing decides what it does with the time. It runs as an autonomous task, so the usual
         safety rules (risk policy, approvals, step and token limits, kill switch) still apply.
+        If it chose to start or carry on one of its projects, the task sees that project's
+        notebook, and afterwards it writes the next entry (:meth:`record_project_session`).
         """
 
         assert self.submit_task is not None
+        project: Project | None = None
+        note = ""
+        wanted = (choice.project or "").strip()
+        if wanted.casefold() == "new":
+            project = await self.projects.start(choice.intent, choice.why)
+            if project is None:
+                note = " (I already have as many projects as I can hold, so this is a one-off.)"
+        elif wanted:
+            project = await self.projects.find(wanted)
+        context = ""
+        if project is not None:
+            activity.detail["project_id"] = project.id
+            context = (
+                "This is a session on one of your own long-running projects. "
+                "Pick up where you left off.\n"
+                f"{ProjectBook.notebook(project)}\n\n"
+            )
         task = await self.submit_task(
-            "This time is your own, and you chose how to use it. What you decided to do: "
-            f"{choice.intent}\n"
+            "This time is your own, and you chose how to use it. "
+            + context
+            + f"What you decided to do now: {choice.intent}\n"
             + (f"Why you wanted to: {choice.why}\n" if choice.why else "")
             + "Use whatever tools you have and whatever steps it takes: look things up on the web, "
             "read and write files in your workspace, run code, build in your world, search or add "
@@ -656,12 +683,56 @@ class Agency:
                 "activity_id": activity.id,
                 "activity_kind": choice.kind,
                 "activity_intent": choice.intent,
+                **({"project_id": project.id} if project is not None else {}),
             },
         )
         activity.detail["task_id"] = task.id
+        where = f" on my project “{project.title}”" if project is not None else " on it"
         return (
-            f"Started on it (task {task.id}). What comes of it will be added here when it's done."
+            f"Started{where} (task {task.id}). What comes of it will be added here when it's "
+            f"done.{note}"
         )
+
+    async def record_project_session(self, project_id: str, intent: str, result: str) -> None:
+        """After working on a project, Fuzzy writes its notebook entry in its own words."""
+
+        project = await self.projects.get(project_id)
+        if project is None:
+            return
+        data = await self._ask(
+            prompts.PROJECT_ENTRY.format(
+                name=self.name,
+                title=project.title,
+                notebook=ProjectBook.notebook(project),
+                intent=intent or "carry on",
+                result=result.strip()[:8000] or "(the session ended without an account of it)",
+            ),
+            temperature=0.5,
+        )
+        shared = await self.redactor.shared()  # projects are shown on the public Brain page
+        entry = shared(_prose(data.get("entry"), 8000))
+        if not entry:
+            entry = (
+                shared(_prose(result, 2000)) or "I worked on it, but didn't write anything down."
+            )
+        status = _text(data.get("status"), 20).lower() or "active"
+        updated = await self.projects.write(
+            project_id,
+            entry=entry,
+            next_step=shared(_prose(data.get("next_step"), 2000)),
+            summary=shared(_prose(data.get("summary"), 6000)),
+            status=status,
+        )
+        if updated is not None:
+            await self._keep(
+                f"My project “{updated.title}”, session {updated.sessions}: {entry}",
+                MemoryKind.REFLECTION,
+                importance=0.5,
+                person=None,
+                project_id=project_id,
+            )
+            if updated.status in ("done", "abandoned"):
+                self.note(f"You marked your project “{updated.title}” as {updated.status}.")
 
     async def _do_create_art(
         self, choice: Choice, activity: ActivityRecord, signals: BodySignals

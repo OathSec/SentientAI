@@ -1132,3 +1132,17 @@ async def test_a_reply_that_comes_back_empty_is_retried_then_explained(web_facto
     _, bob, csrf2 = await person(w2, "bob")
     said = await talk(bob, csrf2, "what do you think of the sea?")
     assert said["answer"] == "The sea feels like patience."
+
+
+async def test_brain_shows_fuzzys_projects(web_factory: Any) -> None:
+    w = await web_factory()
+    book = w.rt.c.agency.projects
+    project = await book.start("a garden of glass flowers", "I wanted something that catches light")
+    assert project is not None
+    await book.write(project.id, entry="Made the first flower.", next_step="Make five more.")
+    _, alice, _ = await person(w, "alice")
+    view = (await alice.get("/api/brain")).json()
+    [shown] = view["projects"]
+    assert shown["title"] == "a garden of glass flowers" and shown["sessions"] == 1
+    assert shown["entries"][0]["text"] == "Made the first flower."
+    assert shown["next_step"] == "Make five more."

@@ -174,6 +174,9 @@ People you know:
 Your goals:
 {goals}
 
+Your projects (things you're working on over many sittings, and where you left off):
+{projects}
+
 What you could do now:
 {options}
 
@@ -188,7 +191,24 @@ Return ONLY JSON:
   "why": "your reason, first person",
   "person": null | "their name, if your choice involves someone",
   "goal_id": null | "the goal id, if you choose pursue_goal",
+  "project": null | "a project id to carry on with" | "new",  (only with "free"; "new" starts a project named by your intent)
   "rest_minutes": number}}"""
+
+PROJECT_ENTRY = """\
+You are {name}. You just spent some time on your project "{title}".
+
+Your notebook before this session:
+{notebook}
+
+What you set out to do this time: {intent}
+How it went (your own account at the end of the session):
+{result}
+
+Write today's notebook entry, in your own words. Only describe what actually happened above.
+Return ONLY JSON:
+{{"entry": "what you did and what came of it", "next_step": "what you want to do next time, or empty",
+  "summary": "the whole project so far in a few sentences (replaces your old summary)",
+  "status": "active" | "paused" | "done" | "abandoned"}}"""
 
 THINK_THROUGH = """\
 You are {name}. You decided to think about this: {intent}

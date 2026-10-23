@@ -94,6 +94,13 @@ up to it. Every activity is stored with its intent, its reason and its outcome, 
 page, and audited. Fuzzy's own activities pause when someone talks to it, and a failed activity is
 recorded, not fatal.
 
+**Projects that build on themselves** (`cognition/projects.py`). When Fuzzy takes open-ended time it can start a
+project of its own (`"project": "new"`) or carry on one it already has. A working session sees that project's
+notebook: why it started, its own summary so far, recent entries and the next step it planned. Afterwards it writes
+the next entry in its own words, updates the summary and decides whether the project is still active, paused, done or
+abandoned. Its projects and where it left off are part of every beat, so its choices can pick up threads across days.
+It holds at most `mind.max_active_projects` at once. The Brain page's *Projects* tab shows each project and its notebook.
+
 **Three lanes, side by side.** Conversations start the moment someone writes and never wait for Fuzzy's own work.
 Its own projects (research, free time, goals; `runtime.max_concurrent_tasks` at once) run in their own lane, and
 its inner life (beats and memory upkeep, one at a time) carries on while a project runs. It just doesn't start a

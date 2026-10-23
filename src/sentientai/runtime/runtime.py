@@ -686,6 +686,16 @@ class Runtime:
                     await c.reflector.reflect(task, outcome)
             except Exception:
                 log.exception("reflection failed", extra={"task_id": task.id})
+        project_id = task.metadata.get("project_id")
+        if project_id and outcome.status is not TaskStatus.CANCELLED:
+            try:
+                await c.agency.record_project_session(
+                    str(project_id),
+                    str(task.metadata.get("activity_intent", "")),
+                    outcome.answer or outcome.error or "",
+                )
+            except Exception:
+                log.exception("project notebook entry failed", extra={"task_id": task.id})
         activity_id = task.metadata.get("activity_id")
         if activity_id:  # an activity Fuzzy started on its own: show how it turned out
             result = (outcome.answer or outcome.error or "").strip()

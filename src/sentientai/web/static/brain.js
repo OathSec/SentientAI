@@ -101,6 +101,18 @@
           el("div", { class: "small muted" }, ago(a.at)))))
       : empty("Nothing yet."));
 
+    section("projects", b.projects && b.projects.length
+      ? el("div", { class: "cols two" }, b.projects.map((p) => el("div", { class: "card" },
+          el("div", { class: "row spread" }, el("strong", {}, p.title), tag(p.status)),
+          el("div", { class: "small muted" }, p.sessions + (p.sessions === 1 ? " session" : " sessions") + " · started " + ago(p.started) + " · last " + ago(p.updated)),
+          p.why ? el("p", { class: "small pre" }, "Why: " + p.why) : null,
+          p.summary ? el("p", { class: "pre" }, p.summary) : null,
+          p.next_step ? el("p", { class: "small" }, el("strong", {}, "Next: "), p.next_step) : null,
+          p.entries.length ? el("details", {}, el("summary", {}, "Notebook (" + p.entries.length + ")"),
+            el("ul", { class: "plain" }, p.entries.map((e) => el("li", {},
+              el("div", { class: "small muted" }, clock(e.at)), el("div", { class: "pre" }, e.text))))) : null)))
+      : empty(name + " hasn’t started a project of its own yet. When it decides to, it’ll show up here."));
+
     const reasoned = b.activities.filter((a) => a.thinking);
     section("reasoning", reasoned.length
       ? el("ul", { class: "plain" }, reasoned.map((a) => el("li", {},
@@ -176,6 +188,7 @@
       case "world.object": return "world: " + p.op + " " + (p.object && p.object.name || "");
       case "world.avatar": return "world: changed how it looks";
       case "world.size": return "world: grew to " + p.size + " m";
+      case "mind.project": return "project " + (p.op === "started" ? "started" : "notebook") + ": " + p.title + (p.op === "entry" && p.entry ? " - " + p.entry : "");
       case "self.belief_formed": case "self.belief_considering": case "self.belief_revised": case "self.belief_kept":
         return e.type.replace("self.belief_", "self: ") + " " + p.aspect + " = " + p.value;
       case "social.appraised": return "opinion of someone updated";
