@@ -164,32 +164,42 @@ Set the matching task prefixes for asymmetric embedding models (nomic uses `sear
 
 ## Images
 
-Image generation runs on a separate server that Fuzzy calls over HTTP. Two kinds are supported
-(`images.backend`): `automatic1111` (Stable Diffusion WebUI or Forge, started with its `--api` option)
-and `openai` (any OpenAI-compatible `/v1/images/generations` server).
+Fuzzy makes pictures through an image server it calls over HTTP (`images.backend`): the bundled one below,
+`automatic1111` (Stable Diffusion WebUI/Forge with `--api`) or any OpenAI-compatible `/v1/images/generations`
+server. Pictures made in a conversation appear in the chat (private to that person); pictures Fuzzy makes on its
+own go in the public gallery. Prompts asking for sexual images are refused, and the bundled server also runs every
+finished picture through the Stable Diffusion safety checker (on the CPU) and discards explicit ones.
 
-**The 1660 Ti is the awkward part of this machine.** Two separate problems:
+### The bundled server, on demand on the 1660 Ti (compose profile `images`)
 
-1. *Black or NaN images.* GTX 16-series cards are widely reported to produce black images with
-   half-precision Stable Diffusion ([example write-up](https://techtactician.com/stable-diffusion-black-image-nans-tensor-fix/)).
-   The reported fix is full precision (`--no-half --precision full` in the WebUI), **which uses more
-   VRAM**. Other flags (such as `--upcast-sampling` or `--no-half-vae`) are often suggested; check
-   the WebUI's own documentation for your version before relying on them.
-2. *VRAM.* With the 4B fast model resident (~4 GB with 16k context), about 2 GB of the 1660 Ti is left. That will
-   not hold a full-precision Stable Diffusion model plus activations.
+Both cards hold a language model, so there is no spare GPU memory for an image model. The bundled server
+(`deploy/imagegen`) solves this by borrowing the 1660 Ti only while it draws:
 
-Your realistic options, best first:
+1. Fuzzy asks for a picture. The app stops the model server on that card (`IMAGE_SWAP_CONTAINER`, normally
+   `sentientai-llm-fast-1`) through the Docker API. Its background work falls back to the 2070 meanwhile.
+2. A short-lived worker loads the image model, draws in **full precision** (GTX 16-series cards make black images in
+   half precision) and exits, so the card is completely free again.
+3. A minute after the last picture (`images.swap_grace_s`), the model server is started again. Several pictures in a
+   row only pause it once. If anything is interrupted, the app starts it again at boot.
 
-| Option | How | Trade-off |
-|---|---|---|
-| **A. Swap on demand** | Keep the image server stopped; start it (and stop the fast server) only when images are wanted, for example with a model-swapping proxy or a small script. | Reflection and background thinking pause while an image is made. Works with full precision. |
-| **B. Low-VRAM mode alongside the fast model** | Run the WebUI with its low-VRAM options on the 1660 Ti next to the 4B model. | May run out of memory with full precision; slow. Test with `nvidia-smi` during a generation. |
-| **C. Put images on the 2070** | Drop heavy to a smaller model/shorter context to free ~3 GB, or swap as in A. | The 2070 handles FP16 properly. Costs chat quality. |
-| **D. Disable** | `images.backend: disabled` (the default). | Fuzzy can't make pictures; everything else works. |
+The server holds no GPU memory while idle. On first start it downloads the model (about 5 GB, into
+`MODELS_PATH/imagegen`) and reads it once so the operating system keeps it in RAM; each picture then loads it in
+seconds. If the card still runs out of memory it retries with model offloading, then on the CPU (slow, but it
+works). `IMAGE_DEVICE=cpu` keeps it off the GPUs entirely. `IMAGE_MODEL` takes any SD 1.5-class diffusers repo
+(default `Lykon/dreamshaper-8`).
 
-Image generation is serialized inside Fuzzy (one at a time, `images.timeout_s` default 240 s) and
-rate-limited per person (`accounts.daily_images`). SDXL-class models need considerably more VRAM than
-a 6 GB card shared with an LLM and are not recommended here.
+```bash
+cat >> deploy/.env <<'ENV'
+SENTIENT_IMAGE_BACKEND=openai
+SENTIENT_IMAGE_URL=http://imagegen:7861
+IMAGE_SWAP_CONTAINER=sentientai-llm-fast-1
+ENV
+docker compose -f deploy/docker-compose.yml --profile models --profile images up -d --build
+docker compose -f deploy/docker-compose.yml logs -f imagegen     # first start: downloading the model
+```
+
+Expect roughly 20 to 60 seconds per 512x512 picture on the 1660 Ti, plus about a minute before the background model
+is back. Image generation is serialized (one at a time) and rate-limited per person (`accounts.daily_images`).
 
 ## Verify
 

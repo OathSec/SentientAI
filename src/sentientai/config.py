@@ -372,8 +372,23 @@ class ImagesConfig(BaseModel):
     height: int = Field(default=512, ge=64, le=2048)
     steps: int = Field(default=25, ge=1, le=150)
     negative_prompt: str = "blurry, low quality, watermark, text"
-    timeout_s: float = Field(default=240.0, gt=0)
+    timeout_s: float = Field(default=600.0, gt=0)
     max_bytes: int = Field(default=15_000_000, gt=0)
+    swap_container: str | None = Field(
+        default=None,
+        description="A model-server container to stop while an image is made, so the image "
+        "model can use its GPU (e.g. sentientai-llm-fast-1). Its work falls back to the other "
+        "tier meanwhile.",
+    )
+    swap_grace_s: float = Field(
+        default=60.0, ge=0, description="Wait this long after the last image before restarting it."
+    )
+    docker_socket: str = "/var/run/docker.sock"
+
+    @field_validator("swap_container", mode="before")
+    @classmethod
+    def _blank_is_none(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
 
 
 class WorldConfig(BaseModel):

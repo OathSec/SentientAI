@@ -118,6 +118,7 @@ class Runtime:
             offline = humanize_duration((now - previous_shutdown).total_seconds())
             c.agency.note(f"You woke up after being switched off for {offline}.")
         await c.db.activities.fail_running(now)
+        await c.images.recover()  # a model server paused for an image is started again
         recovered = await c.db.tasks.recover_interrupted()
         expired = await c.approvals.expire_orphans()
         await c.mind.save(c.db.state)

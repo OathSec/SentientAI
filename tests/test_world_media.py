@@ -511,3 +511,108 @@ async def test_the_self_check_knows_when_nothing_was_made(runtime_factory: Any) 
     [check] = [p for p in prompts if p.startswith("Check a reply")]
     assert "no tools were used for this reply, so nothing was made or done" in check
     assert "says it made, sent, saved or is doing right now" in check
+
+
+def _docker(events: list[str], running: dict[str, bool]) -> respx.MockRouter:
+    router = respx.mock(base_url="http://docker", assert_all_called=False)
+
+    def state(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"State": {"Running": running["llm"]}})
+
+    def stop(request: httpx.Request) -> httpx.Response:
+        events.append("stop")
+        running["llm"] = False
+        return httpx.Response(204)
+
+    def start(request: httpx.Request) -> httpx.Response:
+        events.append("start")
+        running["llm"] = True
+        return httpx.Response(204)
+
+    router.get("/containers/sentientai-llm-fast-1/json").mock(side_effect=state)
+    router.post("/containers/sentientai-llm-fast-1/stop").mock(side_effect=stop)
+    router.post("/containers/sentientai-llm-fast-1/start").mock(side_effect=start)
+    return router
+
+
+async def test_the_background_model_is_paused_for_an_image_and_comes_back(
+    sqlite_db: Database, tmp_path: Path
+) -> None:
+    from sentientai.media.gpuswap import GpuSwap
+
+    events: list[str] = []
+    running = {"llm": True}
+
+    class Backend:
+        name = "fake"
+
+        async def generate(self, prompt: str, *, config: ImagesConfig) -> bytes:
+            events.append("generate" if not running["llm"] else "generate-while-busy")
+            return PNG
+
+        async def aclose(self) -> None:
+            pass
+
+    with _docker(events, running):
+        swap = GpuSwap(
+            "sentientai-llm-fast-1",
+            grace_s=0.05,
+            client=httpx.AsyncClient(base_url="http://docker"),
+        )
+        service = ImageService(
+            ImagesConfig(backend="openai"),
+            sqlite_db,
+            tmp_path / "media",
+            audit=AuditLog(tmp_path / "audit", fsync=False),
+            backend=Backend(),
+            swap=swap,
+        )
+        await service.create("a lighthouse at dusk", user_id=None, public=True)
+        await service.create("a second picture right after", user_id=None, public=True)
+        assert events == ["stop", "generate", "generate"]  # stopped once, not thrashed
+        await asyncio.sleep(0.2)
+        assert events[-1] == "start" and running["llm"]  # back after the grace period
+        running["llm"] = False  # left stopped by a crash...
+        await service.recover()  # ...is started again at boot
+        assert events[-1] == "start" and running["llm"]
+        await service.aclose()
+
+
+async def test_pictures_still_work_if_docker_cannot_be_reached(
+    sqlite_db: Database, tmp_path: Path
+) -> None:
+    from sentientai.media.gpuswap import GpuSwap
+
+    made: list[str] = []
+
+    class Backend:
+        name = "fake"
+
+        async def generate(self, prompt: str, *, config: ImagesConfig) -> bytes:
+            made.append(prompt)
+            return PNG
+
+        async def aclose(self) -> None:
+            pass
+
+    with respx.mock(base_url="http://docker") as router:
+        router.route().mock(side_effect=httpx.ConnectError("no docker"))
+        swap = GpuSwap("x", grace_s=0, client=httpx.AsyncClient(base_url="http://docker"))
+        service = ImageService(
+            ImagesConfig(backend="openai"),
+            sqlite_db,
+            tmp_path / "media",
+            audit=AuditLog(tmp_path / "audit", fsync=False),
+            backend=Backend(),
+            swap=swap,
+        )
+        record = await service.create("a quiet pond", user_id=None, public=True)
+        assert made == ["a quiet pond"] and record.mime == "image/png"
+        await service.aclose()
+
+
+def test_a_blank_swap_container_means_no_swapping() -> None:
+    assert ImagesConfig(swap_container="  ").swap_container is None
+    assert ImagesConfig(swap_container="sentientai-llm-fast-1").swap_container == (
+        "sentientai-llm-fast-1"
+    )

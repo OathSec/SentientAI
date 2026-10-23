@@ -27,6 +27,7 @@ from sentientai.config import ImagesConfig
 from sentientai.core.clock import Clock, SystemClock
 from sentientai.core.events import EventBus
 from sentientai.core.logging import get_logger
+from sentientai.media.gpuswap import GpuSwap
 from sentientai.safety.audit import AuditLog
 from sentientai.storage.database import Database
 from sentientai.storage.records import MediaRecord
@@ -189,6 +190,7 @@ class ImageService:
         bus: EventBus | None = None,
         clock: Clock | None = None,
         backend: ImageBackend | None = None,
+        swap: GpuSwap | None = None,
     ) -> None:
         self.config = config
         self.db = db
@@ -198,6 +200,11 @@ class ImageService:
         self.clock = clock or SystemClock()
         self.backend = backend if backend is not None else build_backend(config)
         self._gpu = asyncio.Lock()
+        if swap is None and self.backend is not None and config.swap_container:
+            swap = GpuSwap(
+                config.swap_container, grace_s=config.swap_grace_s, socket=config.docker_socket
+            )
+        self.swap = swap
 
     @property
     def available(self) -> bool:
@@ -229,7 +236,11 @@ class ImageService:
             raise ImageError(refusal)
         await self._emit("media.generating", prompt=prompt[:200], user_id=user_id)
         async with self._gpu:
-            data = await self.backend.generate(prompt, config=self.config)
+            if self.swap is not None:
+                async with self.swap.borrow():
+                    data = await self.backend.generate(prompt, config=self.config)
+            else:
+                data = await self.backend.generate(prompt, config=self.config)
         if len(data) > self.config.max_bytes:
             raise ImageError("the generated image is too large")
         mime, ext, width, height = sniff_image(data)
@@ -267,6 +278,12 @@ class ImageService:
         if self.bus is not None:
             await self.bus.publish(type_, **payload)
 
+    async def recover(self) -> None:
+        if self.swap is not None:
+            await self.swap.recover()
+
     async def aclose(self) -> None:
+        if self.swap is not None:
+            await self.swap.aclose()
         if self.backend is not None:
             await self.backend.aclose()

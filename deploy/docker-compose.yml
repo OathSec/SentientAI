@@ -23,6 +23,14 @@ services:
       POSTGRES_USER: sentient
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
       POSTGRES_DB: sentientai
+    # More RAM for Fuzzy's memory than Postgres's tiny defaults (raise on a machine with lots).
+    command: >
+      postgres
+      -c shared_buffers=${PG_SHARED_BUFFERS:-1GB}
+      -c effective_cache_size=${PG_CACHE_SIZE:-4GB}
+      -c work_mem=${PG_WORK_MEM:-32MB}
+      -c maintenance_work_mem=${PG_MAINTENANCE_MEM:-256MB}
+    shm_size: 1gb
     volumes:
       - ${SSD_PATH:-/srv/sentientai}/postgres:/var/lib/postgresql/data
     healthcheck:
@@ -89,6 +97,9 @@ services:
       SENTIENT_ACCOUNTS__TRUSTED_PROXIES: '["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]'
       SENTIENT_IMAGES__BACKEND: ${SENTIENT_IMAGE_BACKEND:-disabled}
       SENTIENT_IMAGES__BASE_URL: ${SENTIENT_IMAGE_URL:-http://host.docker.internal:7860}
+      # With the `images` profile: pause this model server while a picture is made on its GPU.
+      SENTIENT_IMAGES__SWAP_CONTAINER: ${IMAGE_SWAP_CONTAINER:-}
+      SENTIENT_IMAGES__TIMEOUT_S: ${IMAGE_TIMEOUT_S:-900}
       SENTIENT_SAFETY__AUDIT_HMAC_KEY: ${SENTIENT_AUDIT_KEY:?set SENTIENT_AUDIT_KEY in deploy/.env}
       # Where each tier's model server is. The defaults are the two servers below; for the
       # single big-model layout (profile `bigmodel`) point both at http://llm-big:8000/v1.
@@ -198,6 +209,29 @@ services:
       --n-gpu-layers 999 --split-mode layer --tensor-split ${BIG_SPLIT:-6,8}
       --ctx-size ${BIG_CTX_SIZE:-24576} --flash-attn ${FLASH_ATTN:-on}
       --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${FAST_PARALLEL:-2}
+
+  # Image generation on demand (profile `images`): Stable Diffusion on the 1660 Ti, full
+  # precision. Idle, it holds no GPU memory; for each picture Fuzzy pauses the model server on
+  # that card (IMAGE_SWAP_CONTAINER), draws, and restarts it a minute after the last picture.
+  # The model (IMAGE_MODEL, an SD 1.5-class diffusers repo) downloads on first start into
+  # MODELS_PATH/imagegen and is kept in RAM by the OS file cache. See docs/hardware.md.
+  imagegen:
+    <<: *restart
+    profiles: [images]
+    build: ./imagegen
+    image: sentientai-imagegen:latest
+    environment:
+      IMAGE_MODEL: ${IMAGE_MODEL:-Lykon/dreamshaper-8}
+      IMAGE_DEVICE: ${IMAGE_DEVICE:-auto}
+      IMAGE_CPU_THREADS: ${IMAGE_CPU_THREADS:-0}
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["${IMAGE_GPU:-${FAST_GPU:-1}}"], capabilities: [gpu]}]
+    volumes:
+      - ${MODELS_PATH:-./models}/imagegen:/models/hf
+    shm_size: 2gb
 
   # Embeddings on the CPU: tiny, and it keeps the GPUs' VRAM for the language models.
   llm-embed:

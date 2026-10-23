@@ -1128,9 +1128,13 @@ async def test_a_reply_that_comes_back_empty_is_retried_then_explained(web_facto
     said = await talk(alice, csrf, "what do you think of the sea?")
     assert "(no answer produced)" not in said["answer"]
     assert "ran out of room" in said["answer"]
-    w2 = await web_factory(Brain(["", "The sea feels like patience."]))
-    _, bob, csrf2 = await person(w2, "bob")
-    said = await talk(bob, csrf2, "what do you think of the sea?")
+
+
+async def test_an_empty_reply_is_retried_once_before_giving_up(web_factory: Any) -> None:
+    # A separate test: two runtimes on one database would race for each other's messages.
+    w = await web_factory(Brain(["", "The sea feels like patience."]))
+    _, bob, csrf = await person(w, "bob")
+    said = await talk(bob, csrf, "what do you think of the sea?")
     assert said["answer"] == "The sea feels like patience."
 
 
