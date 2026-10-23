@@ -102,6 +102,47 @@ def _text(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+def _same(a: ActivityRecord, b: ActivityRecord) -> bool:
+    def key(x: ActivityRecord) -> str:
+        return x.kind + ":" + " ".join(x.intent.casefold().split())
+
+    return key(a) == key(b)
+
+
+def _streak(recent: list[ActivityRecord]) -> int:
+    """How many of the newest activities in a row were the same choice."""
+
+    count = 0
+    for activity in recent:
+        if count and not _same(activity, recent[0]):
+            break
+        count += 1
+    return count
+
+
+def _recent_lines(recent: list[ActivityRecord], groups: int = 8) -> str:
+    """What it did lately, newest first, with runs of the same thing shown once."""
+
+    lines: list[str] = []
+    i = 0
+    while i < len(recent) and len(lines) < groups:
+        run = [recent[i]]
+        while i + len(run) < len(recent) and _same(recent[i + len(run)], recent[i]):
+            run.append(recent[i + len(run)])
+        a = run[0]
+        when = (
+            f"{a.started_at:%m-%d %H:%M}"
+            if len(run) == 1
+            else f"{len(run)} times in a row, {run[-1].started_at:%H:%M} to {a.started_at:%H:%M}"
+        )
+        lines.append(
+            f"- {when} {a.kind}: {a.intent[:400]}"
+            + (f" -> {'last time: ' if len(run) > 1 else ''}{a.outcome[:600]}" if a.outcome else "")
+        )
+        i += len(run)
+    return "\n".join(lines)
+
+
 def _prose(value: Any, limit: int = 20_000) -> str:
     """Longer writing keeps its paragraphs; the limit is only a safety net, not a style."""
 
@@ -365,19 +406,22 @@ class Agency:
                 f"- {a.name}: talked {rel.interactions} times, last {ago} ago; "
                 f"you {fondness} them. {rel.opinion}"
             )
-        recent = await self.db.activities.recent(limit=8)
+        recent = await self.db.activities.recent(limit=30)
+        streak = _streak(recent)
+        if streak >= 3:
+            # A measured fact about itself, like the sameness signal: what it does about it is
+            # its own choice. (Small models otherwise copy a long list of identical lines.)
+            self.note(
+                f"You've chosen the same thing {streak} times in a row: "
+                f"{recent[0].kind}: {recent[0].intent[:200]}"
+            )
         feelings = await self.emotions.current(Scope.system())
         prompt = prompts.LIVE_BEAT.format(
             name=self.name,
             feelings=self.emotions.render(feelings, everything=True),
             signals=signals.describe(),
             events="\n".join(self._happenings) or "- nothing in particular",
-            recent="\n".join(
-                f"- {a.started_at:%m-%d %H:%M} {a.kind}: {a.intent[:400]}"
-                + (f" -> {a.outcome[:600]}" if a.outcome else "")
-                for a in recent
-            )
-            or "- nothing yet: this is your first time to yourself",
+            recent=_recent_lines(recent) or "- nothing yet: this is your first time to yourself",
             people="\n".join(known) or "- nobody yet",
             goals=GoalManager.render(await self.goals.active()),
             projects=ProjectBook.render(await self.projects.active()),
@@ -386,7 +430,11 @@ class Agency:
         )
         response = await self.router.chat(
             ChatRequest(
-                messages=[Message.user(prompt)], temperature=0.8, json_mode=True, max_tokens=4000
+                messages=[Message.user(prompt)],
+                # A long run of the same choice loosens up a little, the way boredom does.
+                temperature=0.8 + 0.06 * min(streak, 5),
+                json_mode=True,
+                max_tokens=4000,
             ),
             kind=TaskKind.REFLECT,
         )

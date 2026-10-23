@@ -93,12 +93,22 @@
         : typeof b.considering === "number" && b.considering ? el("p", { class: "small muted" }, "Thinking over " + b.considering + " possible change(s).") : null);
     section("story", b.story ? el("p", { class: "pre" }, b.story) : empty("Nothing written yet."));
 
-    section("activities", b.activities.length
-      ? el("ul", { class: "plain" }, b.activities.map((a) => el("li", {},
-          el("div", {}, tag(a.kind), a.status !== "done" ? tag(a.status) : null, a.private ? tag("private") : null, a.intent),
-          a.reason ? el("div", { class: "small muted pre" }, "why: " + a.reason) : null,
-          a.outcome ? el("details", {}, el("summary", {}, "result"), el("div", { class: "small pre scroll" }, a.outcome)) : null,
-          el("div", { class: "small muted" }, ago(a.at)))))
+    // Runs of the same choice are shown once, with how many times and over how long.
+    const runs = [];
+    for (const a of b.activities) {
+      const last = runs[runs.length - 1];
+      const key = a.kind + ":" + a.intent.trim().toLowerCase();
+      if (last && last.key === key) last.items.push(a); else runs.push({ key, items: [a] });
+    }
+    section("activities", runs.length
+      ? el("ul", { class: "plain" }, runs.map(({ items }) => {
+          const a = items[0], n = items.length;
+          return el("li", {},
+            el("div", {}, tag(a.kind), n > 1 ? tag("×" + n) : null, a.status !== "done" ? tag(a.status) : null, a.private ? tag("private") : null, a.intent),
+            a.reason ? el("div", { class: "small muted pre" }, "why: " + a.reason) : null,
+            a.outcome ? el("details", {}, el("summary", {}, n > 1 ? "latest result" : "result"), el("div", { class: "small pre scroll" }, a.outcome)) : null,
+            el("div", { class: "small muted" }, n > 1 ? n + " times, " + ago(items[n - 1].at) + " to " + ago(a.at) : ago(a.at)));
+        }))
       : empty("Nothing yet."));
 
     section("projects", b.projects && b.projects.length

@@ -940,3 +940,36 @@ async def test_fuzzy_can_only_hold_so_many_projects(runtime_factory: Any) -> Non
     [first, _] = await book.active()
     await book.write(first.id, entry="Finished it.", status="done")
     assert await book.start("three") is not None
+
+
+async def test_a_rut_is_shown_to_it_as_a_rut_not_as_a_list_to_copy(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    from datetime import timedelta
+
+    from sentientai.storage.records import ActivityRecord
+
+    seen: list[Any] = []
+
+    def choose(request: Any) -> dict[str, Any]:
+        seen.append(request)
+        return beat("wander", "follow wherever my memories go")
+
+    rt = await runtime_factory(Brain(beat=choose), start=False)
+    now = rt.c.clock.now()
+    for i in range(12):
+        await rt.c.db.activities.insert(
+            ActivityRecord(
+                kind="think",
+                intent="Reflect on the impact of community on my learning journey",
+                outcome="Community matters to me.",
+                started_at=now - timedelta(minutes=i + 1),
+                finished_at=now - timedelta(minutes=i + 1),
+            )
+        )
+    await rt.c.agency.beat()
+    prompt = seen[0].messages[-1].text
+    assert prompt.count("Reflect on the impact of community") == 2  # once in the list, once noted
+    assert "12 times in a row" in prompt
+    assert "You've chosen the same thing 12 times in a row" in prompt
+    assert seen[0].temperature > 0.8  # a little looser after a long run
