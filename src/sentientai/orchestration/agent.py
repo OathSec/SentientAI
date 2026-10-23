@@ -12,16 +12,20 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from sentientai import prompts
 from sentientai.cognition.goals import GoalManager
 from sentientai.cognition.grounding import Grounding
+from sentientai.cognition.intentions import Intentions
 from sentientai.cognition.metacognition import Assessment, Metacognition
 from sentientai.cognition.mind import Mind
 from sentientai.cognition.persona import Persona, Perspective
 from sentientai.config import Settings
 from sentientai.core.clock import Clock, SystemClock
 from sentientai.core.events import EventBus
+from sentientai.core.jsonparse import extract_object
 from sentientai.core.logging import get_logger, log_context
 from sentientai.core.metrics import Metrics
 from sentientai.errors import KillSwitchEngagedError, LoopBreakError, ModelError
@@ -42,6 +46,7 @@ from sentientai.orchestration.planner import Planner
 from sentientai.safety.audit import AuditLog
 from sentientai.safety.killswitch import KillSwitch
 from sentientai.safety.limits import LoopGuard
+from sentientai.storage.database import ActivityRepository, UserRepository
 from sentientai.storage.records import Scope, ScoredMemory, TaskRecord, TaskSource, TaskStatus
 from sentientai.tools.base import ToolContext, ToolRegistry
 from sentientai.tools.executor import ToolExecutor
@@ -258,6 +263,12 @@ class CognitiveAgent:
             note_before_message=settings.models.heavy.system_note_mid_conversation
         )
         self.compressor = ContextCompressor(router)
+        # Set by the runtime / container: what it is doing in the background, and the stores the
+        # "do I want to talk?" decision reads and writes.
+        self.busy_with: Callable[[], str | None] | None = None
+        self.activities: ActivityRepository | None = None
+        self.users: UserRepository | None = None
+        self.intentions: Intentions | None = None
         self.planner = Planner(router, min_chars=settings.runtime.planning_min_chars)
         models = settings.models
         self._one_model = models.heavy.base_url.rstrip("/") == models.fast.base_url.rstrip("/")
@@ -353,6 +364,75 @@ class CognitiveAgent:
             duration_s=outcome.duration_s,
         )
 
+    async def _wants_to_talk(
+        self,
+        task: TaskRecord,
+        perspective: Perspective | None,
+        history: list[Turn],
+    ) -> str | None:
+        """Fuzzy decides whether to talk. Returns what it says instead, or None to go ahead.
+
+        Nothing decides this for it: it sees what it's doing, how it feels, who is asking and
+        what they said, and chooses. If the decision can't be made (model trouble) it talks."""
+
+        busy = self.busy_with() if self.busy_with is not None else None
+        recent = await self.activities.recent(limit=3) if self.activities is not None else []
+        doing = "\n".join(
+            [f"- right now, in the background: {busy}" if busy else "- nothing in particular"]
+            + [f"- earlier: {a.kind}: {a.intent[:160]}" for a in recent if a.user_id is None]
+        )
+        dialogue = [t for t in history if t.role in {"user", "assistant"}][-4:]
+        who = self.mind.self_model.name
+        now = self.clock.now()
+        try:
+            response = await self.router.chat(
+                ChatRequest(
+                    messages=[
+                        Message.user(
+                            prompts.ENGAGE.format(
+                                name=who,
+                                now=f"{now:%A %d %B %Y, %H:%M} UTC",
+                                doing=doing,
+                                feelings=perspective.feelings if perspective else "(unknown)",
+                                person=(perspective.person + "\n")
+                                if perspective and perspective.person
+                                else "",
+                                dialogue="\n".join(f"{t.role}: {t.content[:400]}" for t in dialogue)
+                                or "(nothing yet)",
+                                message=task.goal[:1500],
+                            )
+                        )
+                    ],
+                    temperature=0.7,
+                    json_mode=True,
+                    max_tokens=500,
+                ),
+                kind=TaskKind.CHAT,
+            )
+        except ModelError:
+            return None
+        data = extract_object(response.message.text) or {}
+        choice = str(data.get("choice") or "talk").strip().lower()
+        if choice not in {"later", "decline", "no", "not now"}:
+            return None
+        say = " ".join(str(data.get("say") or "").split())[:1500]
+        if choice == "later" and self.intentions is not None and task.user_id:
+            user = await self.users.get(task.user_id) if self.users is not None else None
+            await self.intentions.add(
+                "talk with them when I'm free",
+                str(data.get("why") or "")[:300],
+                for_whom=user.display_name if user else None,
+                user_id=task.user_id,
+            )
+        await self.audit.record(
+            "agent.declined_to_talk",
+            task_id=task.id,
+            choice=choice,
+            why=str(data.get("why") or "")[:500],
+            said=say,
+        )
+        return say or "…"
+
     async def _run(self, task: TaskRecord, guard: LoopGuard, outcome: TaskOutcome) -> None:
         mind = self.mind
         # People who aren't admins get a restricted toolset; the operator and admins don't.
@@ -389,6 +469,11 @@ class CognitiveAgent:
             if self.persona is not None
             else None
         )
+        if task.kind == "chat" and self.settings.mind.choose_to_talk:
+            declined = await self._wants_to_talk(task, perspective, history)
+            if declined is not None:
+                outcome.answer = declined
+                return
         redact = perspective.redact if perspective else (lambda text: text)
         if task.user_id is not None:
             goal_scope = Scope.for_user(task.user_id)

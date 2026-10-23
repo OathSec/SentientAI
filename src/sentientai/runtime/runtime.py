@@ -93,6 +93,10 @@ class Runtime:
         components.agency.submit_task = self.submit
         components.agency.pursue_goal = self._pursue_goal
         components.agency.current_project = self._current_project
+        components.agent.busy_with = self._current_project
+        components.agent.activities = components.db.activities
+        components.agent.users = components.db.users
+        components.agent.intentions = components.agency.intentions
 
     @classmethod
     async def create(

@@ -338,6 +338,11 @@ class MindConfig(BaseModel):
         default=True, description="Check each reply against memory before sending it."
     )
     appraise_relationships: bool = True
+    choose_to_talk: bool = Field(
+        default=True,
+        description="Before answering a message, Fuzzy decides whether it wants to talk now, "
+        "later, or not (and says so in its own words). Off: it always answers.",
+    )
     appraise_after_quiet_s: float = Field(
         default=120.0,
         ge=0,

@@ -189,3 +189,33 @@ async def test_a_beat_can_say_which_promise_it_is_keeping(runtime_factory: Any) 
     assert activity is not None and activity.detail["intention_id"] == intention.id
     [note] = await rt.c.db.notes.for_user(owen.id)
     assert "Grey, endless, and kind." in note.content
+
+
+async def test_it_can_decline_to_talk_and_say_so_in_its_own_words(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    brain = Brain(
+        ["I should never be reached."],
+        engage=[
+            {"choice": "decline", "why": "I'm deep in my project", "say": "Not now. Busy."},
+            {"choice": "later", "why": "want to finish first", "say": "Ask me after I'm done."},
+            {"choice": "talk", "say": ""},
+        ],
+    )
+    rt = await runtime_factory(brain)
+    owen = await make_user(rt, "Owen")
+    first = await rt.chat("s", "hey are you there", user=owen, timeout=10)
+    assert first.answer == "Not now. Busy." and first.task.status.value == "succeeded"
+    assert brain.agent_requests == []  # it never even started composing a reply
+    second = await rt.chat("s", "please?", user=owen, timeout=10)
+    assert second.answer == "Ask me after I'm done."
+    [promise] = await rt.c.agency.intentions.active()
+    assert promise.for_whom == "Owen" and "talk with them" in promise.what
+    third = await rt.chat("s", "now?", user=owen, timeout=10)
+    assert third.answer == "I should never be reached."
+
+
+async def test_choosing_to_talk_can_be_switched_off(runtime_factory: Any) -> None:  # noqa: F811
+    brain = Brain(["Sure."], engage={"choice": "decline", "say": "no"})
+    rt = await runtime_factory(brain, mind={"choose_to_talk": False})
+    assert (await rt.chat("s", "hi", timeout=10)).answer == "Sure."
