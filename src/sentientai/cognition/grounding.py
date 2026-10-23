@@ -81,7 +81,9 @@ class Grounding:
                     json_mode=True,
                     max_tokens=2000,
                 ),
-                kind=TaskKind.REFLECT,
+                # A person is waiting on this check, so it runs on the conversation's (heavy) tier,
+                # not the one doing Fuzzy's background thinking.
+                kind=TaskKind.CHAT,
             )
         except ModelError as exc:
             log.warning("grounding check unavailable", extra={"error": str(exc)})
