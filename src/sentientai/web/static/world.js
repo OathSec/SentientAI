@@ -153,6 +153,22 @@
   const follow = $("follow");
   follow.addEventListener("change", () => { if (follow.checked) view.focus = null; });
 
+  // The side panel can be tucked away (remembered; starts tucked away on a phone).
+  const side = $("side"), sideToggle = $("sidetoggle");
+  function setSide(open) {
+    side.classList.toggle("collapsed", !open);
+    sideToggle.textContent = open ? "Hide panel" : "Show panel";
+    sideToggle.setAttribute("aria-expanded", String(open));
+  }
+  let saved = null;
+  try { saved = localStorage.getItem("fuzzy.world.panel"); } catch (e) { /* storage may be blocked */ }
+  setSide(saved ? saved === "open" : !window.matchMedia("(max-width: 40rem)").matches);
+  sideToggle.addEventListener("click", () => {
+    const open = side.classList.contains("collapsed");
+    setSide(open);
+    try { localStorage.setItem("fuzzy.world.panel", open ? "open" : "closed"); } catch (e) { /* ignore */ }
+  });
+
   // Moving the view yourself (panning) stops following Fuzzy; tick "Follow" to go back to it.
   function freeLook() { follow.checked = false; view.focus = null; }
   function pan(right, forward) {
