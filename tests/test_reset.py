@@ -68,3 +68,20 @@ async def test_teachings_can_be_kept_across_a_reset(runtime_factory: Any) -> Non
     kept = await fresh.c.db.memories.list(scope=Scope.system())
     assert kept and all(m.kind is MemoryKind.DOCUMENT for m in kept)
     assert [d.title for d in await fresh.c.db.documents.list()] == ["Ferns"]
+
+
+async def test_the_thinking_tab_starts_fresh_after_a_reset_but_the_record_stays(
+    tmp_path: Any,
+) -> None:
+    from sentientai.safety.audit import AuditLog
+
+    log = AuditLog(tmp_path / "audit", fsync=False)
+    await log.record("agent.answer", answer="an answer from the old Fuzzy")
+    await log.record("mind.reset", actor="operator:cli")
+    await log.record("agent.answer", answer="the new Fuzzy's first answer")
+    types = ("agent.answer",)
+    assert [e.payload["answer"] for e in log.recent(10, types, since_last="mind.reset")] == [
+        "the new Fuzzy's first answer"
+    ]
+    assert len(log.recent(10, types)) == 2  # nothing was deleted
+    assert log.verify().ok  # and the chain is intact

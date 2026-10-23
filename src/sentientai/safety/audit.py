@@ -250,19 +250,27 @@ class AuditLog:
         ]
         return entries[-n:]
 
-    def recent(self, n: int, types: tuple[str, ...]) -> list[AuditEntry]:
-        """The newest ``n`` entries of the given types, reading the newest segments first."""
+    def recent(
+        self, n: int, types: tuple[str, ...], *, since_last: str | None = None
+    ) -> list[AuditEntry]:
+        """The newest ``n`` entries of the given types, reading the newest segments first.
+
+        With ``since_last``, only entries after the most recent entry of that type (for example
+        everything since Fuzzy's mind was last reset); the log itself is never altered.
+        """
 
         found: list[AuditEntry] = []
         for segment in reversed(self.segments()):
             with segment.open("r", encoding="utf-8") as fh:
-                batch = [
-                    e
-                    for e in (AuditEntry.model_validate_json(ln) for ln in fh if ln.strip())
-                    if e.type in types
-                ]
-            found = batch + found
-            if len(found) >= n:
+                entries = [AuditEntry.model_validate_json(ln) for ln in fh if ln.strip()]
+            boundary = next(
+                (i for i in range(len(entries) - 1, -1, -1) if entries[i].type == since_last),
+                None,
+            )
+            if boundary is not None:
+                entries = entries[boundary + 1 :]
+            found = [e for e in entries if e.type in types] + found
+            if boundary is not None or len(found) >= n:
                 break
         return found[-n:]
 

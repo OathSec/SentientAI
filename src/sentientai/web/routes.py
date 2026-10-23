@@ -7,6 +7,7 @@ aliases defined inside :func:`build_router` at definition time.
 import asyncio
 import contextlib
 import fnmatch
+import functools
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -824,9 +825,12 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
         """What Fuzzy worked through when it answered people (newest last)."""
 
         entries = await asyncio.to_thread(
-            c.audit.recent,
-            limit * 3,
-            ("agent.reasoning", "agent.thought", "agent.answer", "agent.grounding"),
+            functools.partial(
+                c.audit.recent,
+                limit * 3,
+                ("agent.reasoning", "agent.thought", "agent.answer", "agent.grounding"),
+                since_last="mind.reset",  # a fresh start shows a fresh Thinking tab
+            )
         )
         return [
             {
