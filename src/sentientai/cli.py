@@ -1027,6 +1027,25 @@ def workers_list() -> None:
         )
 
 
+@workers_app.command("trust")
+def workers_trust(
+    name_or_id: str,
+    kind: str = typer.Argument("private", help="private (your own computer) or shared."),
+) -> None:
+    """Say whether a computer is your own (private) or a shared one."""
+
+    if kind not in ("private", "shared"):
+        _fail("kind must be private or shared")
+
+    async def work(registry: Any) -> Any:
+        return await registry.set_trust(name_or_id, kind)
+
+    found = _run_workers(work)
+    if found is None:
+        _fail(f"no active worker named {name_or_id}")
+    typer.echo(f"{found.name} is now {found.trust}")
+
+
 @workers_app.command("revoke")
 def workers_revoke(name_or_id: str) -> None:
     """Stop a token from working. It disconnects at its next check-in."""

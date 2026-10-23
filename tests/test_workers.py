@@ -21,7 +21,7 @@ from sentientai.media.images import ImageService
 from sentientai.models.types import ChatRequest, Message
 from sentientai.safety.audit import AuditLog
 from sentientai.storage.database import Database
-from sentientai.storage.records import MemoryKind
+from sentientai.storage.records import MemoryKind, UserRole
 from sentientai.workers.api import build_worker_router
 from sentientai.workers.client import WorkerFirstClient
 from sentientai.workers.hub import WorkerError, WorkerHub
@@ -533,3 +533,26 @@ async def test_the_steps_around_a_reply_are_marked_as_pieces_of_a_conversation(
     await asyncio.sleep(0.5)
     assert marks == {"engage": True, "grounding": True, "appraisal": True}
     assert brain.agent_requests and not brain.agent_requests[0].snippet  # the reply itself isn't
+
+
+async def test_an_administrator_can_say_a_computer_is_their_own_but_others_cannot(
+    web_factory: Any,  # noqa: F811
+) -> None:
+    from tests.test_web import GOOD, post, sign_in
+
+    web = await web_factory()
+    await web.rt.c.accounts.create_user("boss", GOOD, display_name="Boss", role=UserRole.ADMIN)
+    await web.rt.c.accounts.create_user("alex", GOOD, display_name="Alex")
+    boss, alex = web.client(), web.client()
+    boss_csrf, alex_csrf = await sign_in(boss, "boss"), await sign_in(alex, "alex")
+    made = await post(alex, "/api/compute/computers", alex_csrf, json={"name": "Alex's PC"})
+    other = await post(boss, "/api/compute/computers", boss_csrf, json={"name": "Boss PC"})
+    mine = (await boss.get("/api/compute")).json()["mine"][0]
+    assert made.status_code == other.status_code == 200 and not mine["own"]  # shared by default
+    refused = await post(
+        alex, f"/api/compute/computers/{mine['id']}/own", alex_csrf, json={"own": True}
+    )
+    assert refused.status_code in (401, 403)  # only an administrator
+    ok = await post(boss, f"/api/compute/computers/{mine['id']}/own", boss_csrf, json={"own": True})
+    assert ok.json() == {"ok": True, "trust": "private"}
+    assert (await boss.get("/api/compute")).json()["mine"][0]["own"]

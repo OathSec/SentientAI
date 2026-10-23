@@ -43,7 +43,7 @@ def page(path: str, title: str, description: str, body: str) -> None:
 <a class="skip" href="#main">Skip to content</a>
 <header class="top">
   <div class="bar">
-    <a class="brand" href="/"><span class="mark" aria-hidden="true"></span><span>Project Fuzzy</span></a>
+    <a class="brand" href="/"><span>Project Fuzzy</span></a>
     <nav aria-label="Main">{links}</nav>
     <a class="btn small" href="{FUZZY}">Meet Fuzzy</a>
   </div>
@@ -54,7 +54,7 @@ def page(path: str, title: str, description: str, body: str) -> None:
 <footer class="foot">
   <div class="wrap foot-grid">
     <div>
-      <a class="brand" href="/"><span class="mark" aria-hidden="true"></span><span>Project Fuzzy</span></a>
+      <a class="brand" href="/"><span>Project Fuzzy</span></a>
       <p class="muted small">An experiment in giving an AI a life of its own.<br>A SystemBridge project.</p>
     </div>
     <div class="foot-links">

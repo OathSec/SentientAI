@@ -51,6 +51,7 @@ def build_compute_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
     router = APIRouter(tags=["compute"])
     c = runtime.c
     Person = Annotated[Principal, Depends(auth.person)]
+    Admin = Annotated[Principal, Depends(auth.admin)]
     cache: dict[str, tuple[float, Any]] = {}
 
     async def home_gpus() -> list[dict[str, Any]]:
@@ -176,6 +177,32 @@ def build_compute_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
             "name": record.name,
             "code": connection_code(site_address(request), token),
         }
+
+    class Ownership(BaseModel):
+        own: bool
+
+    @router.post("/api/compute/computers/{worker_id}/own")
+    async def set_own(
+        worker_id: str, body: Ownership, request: Request, p: Admin
+    ) -> dict[str, Any]:
+        """An administrator says a computer is their own: it may run Fuzzy's private thinking."""
+
+        json_only(request)
+        me = p.user
+        record = next(
+            (r for r in await c.worker_registry.for_owner(me.id) if r.id == worker_id)
+            if me is not None
+            else iter(()),
+            None,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="no such computer of yours")
+        trust: Trust = "private" if body.own else "shared"
+        await c.worker_registry.set_trust(record.id, trust)
+        await c.audit.record(
+            "worker.trust", actor=f"user:{me.id if me else ''}", worker=record.name, trust=trust
+        )
+        return {"ok": True, "trust": trust}
 
     @router.delete("/api/compute/computers/{worker_id}")
     async def unlink_computer(worker_id: str, request: Request, p: Person) -> dict[str, bool]:

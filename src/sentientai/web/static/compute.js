@@ -28,10 +28,13 @@
         (g.temp_c ? " · " + Math.round(g.temp_c) + " °C" : "")));
   }
 
+  // Node.append(array) turns the array into text; always insert the nodes themselves.
+  const fill = (node, items) => clear(node).append(...[].concat(items));
+
   function tile(label, value) { return el("div", { class: "tile" }, el("div", { class: "num" }, String(value)), el("div", { class: "small muted" }, label)); }
 
   function computerCard(c) {
-    const what = c.capabilities.map((x) => (x === "llm" ? "chat" : "pictures")).join(" + ");
+    const what = c.capabilities.map((x) => ({ llm: "thinking", image: "pictures", embed: "processor" }[x] || x)).join(" + ");
     return el("div", { class: "computer" },
       el("div", { class: "row spread" }, el("strong", {}, c.name), chip(c)),
       c.gpu ? el("div", { class: "small" }, c.gpu + (c.memory_total_mb ? " · " + gb(c.memory_total_mb) : "")) : el("div", { class: "small muted" }, "not connected yet"),
@@ -42,7 +45,16 @@
         el("dt", {}, "Jobs done"), el("dd", {}, c.jobs + (c.jobs ? " (" + c.chat_jobs + " chat, " + c.picture_jobs + " pictures)" : "")),
         el("dt", {}, "Time working"), el("dd", {}, hours(c.busy_s)),
         c.online ? [el("dt", {}, "Connected for"), el("dd", {}, hours(c.connected_s))] : [el("dt", {}, "Last seen"), el("dd", {}, c.last_seen_at ? ago(c.last_seen_at) : "never")]),
+      state.admin ? el("button", { class: "link small", onclick: () => setOwn(c) }, c.own ? "Make this a shared computer" : "This is my own computer") : null,
+      " ",
       el("button", { class: "link small", onclick: () => unlink(c) }, "Unlink this computer"));
+  }
+
+  async function setOwn(c) {
+    const own = !c.own;
+    if (own && !confirm("Mark " + c.name + " as your own computer? It will be allowed to run Fuzzy's private thinking, including pieces of conversations.")) return;
+    try { await api("/api/compute/computers/" + encodeURIComponent(c.id) + "/own", { method: "POST", body: { own } }); } catch (e) { alert(e.message); }
+    load();
   }
 
   async function unlink(c) {
@@ -71,8 +83,9 @@
   $("add").addEventListener("click", async () => {
     const name = prompt("What should we call this computer? (for example “Alex's gaming PC”)");
     if (!name || !name.trim()) return;
+    const own = !!(state.admin && confirm("Is this one of YOUR OWN computers? OK lets it run Fuzzy's private thinking (conversations included). Cancel makes it a shared computer that only ever draws public pictures."));
     try {
-      const data = await api("/api/compute/computers", { method: "POST", body: { name: name.trim(), own: false } });
+      const data = await api("/api/compute/computers", { method: "POST", body: { name: name.trim(), own } });
       showLinker(data, lastDownload);
     } catch (e) { alert(e.message); }
   });
@@ -89,13 +102,13 @@
     clear($("mine-totals")).append(
       tile("your computers", t.computers), tile("jobs for Fuzzy", t.jobs), tile("time working", hours(t.busy_s)),
       tile("your rank", t.rank ? "#" + t.rank + " of " + t.of : "n/a"));
-    clear($("mine")).append(d.mine.length ? d.mine.map(computerCard) : el("p", { class: "muted" }, "No computers linked yet. Press “Add a computer” to lend yours."));
+    fill($("mine"), d.mine.length ? d.mine.map(computerCard) : el("p", { class: "muted" }, "No computers linked yet. Press “Add a computer” to lend yours."));
 
-    clear($("leaders")).append(d.leaders.length ? d.leaders.map((l) => el("li", {}, el("span", {}, l.name), el("span", { class: "muted small" }, " " + hours(l.busy_s) + " · " + l.jobs + " jobs"))) : el("li", { class: "muted" }, "Nobody yet. Be the first!"));
+    fill($("leaders"), d.leaders.length ? d.leaders.map((l) => el("li", {}, el("span", {}, l.name), el("span", { class: "muted small" }, " " + hours(l.busy_s) + " · " + l.jobs + " jobs"))) : el("li", { class: "muted" }, "Nobody yet. Be the first!"));
 
     const cards = p.home_gpus.map((g) => gpuCard({ ...g, sub: "Fuzzy's home server", chip: el("span", { class: "chip on" }, "home") }));
     for (const c of d.computers) cards.push(gpuCard({ name: c.gpu || c.name, sub: c.name + " · " + c.owner, load_pct: c.load_pct, memory_total_mb: c.memory_total_mb, chip: chip(c) }));
-    clear($("pool")).append(cards.length ? cards : el("p", { class: "muted" }, "No graphics cards reported."));
+    fill($("pool"), cards.length ? cards : el("p", { class: "muted" }, "No graphics cards reported."));
   }
 
   load();

@@ -33,7 +33,6 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 0.85em; backgr
 header.top { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); }
 .bar { max-width: 68rem; margin: 0 auto; padding: 0.7rem 1.25rem; display: flex; align-items: center; gap: 1.5rem; }
 .brand { display: inline-flex; align-items: center; gap: 0.6rem; font-weight: 700; font-size: 1.1rem; color: var(--ink); text-decoration: none; }
-.mark { width: 1.1rem; height: 1.1rem; border-radius: 50%; background: var(--accent); display: inline-block; }
 nav { display: flex; gap: 1.2rem; flex: 1; flex-wrap: wrap; }
 nav a { color: var(--muted); text-decoration: none; padding: 0.15rem 0; border-bottom: 2px solid transparent; }
 nav a:hover { color: var(--ink); }

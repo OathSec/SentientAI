@@ -119,6 +119,15 @@ class WorkerRegistry:
                 match = record
         return match
 
+    async def set_trust(self, id_or_name: str, trust: Trust) -> WorkerRecord | None:
+        records = await self.all()
+        found = next((r for r in records if not r.revoked and id_or_name in (r.id, r.name)), None)
+        if found is None:
+            return None
+        found.trust = trust
+        await self._save(records)
+        return found
+
     async def for_owner(self, owner_id: str) -> list[WorkerRecord]:
         return [r for r in await self.all() if r.owner_id == owner_id and not r.revoked]
 
