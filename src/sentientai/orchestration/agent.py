@@ -10,6 +10,7 @@ Every model turn, hidden reasoning, tool call and outcome is audited.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -54,6 +55,20 @@ _KIND_BY_TASK = {
     "plan": TaskKind.PLAN,
     "improve": TaskKind.IMPROVE,
 }
+
+
+# "I made you a picture", "let me create an image", "here's your painting"...
+_PICTURE_CLAIM = re.compile(
+    r"\b(?:i(?:'ll| will|'m going to| am going to| can| just)?\s+(?:make|create|generate|draw|"
+    r"paint|render)|let me (?:make|create|generate|draw|paint|render)|here(?:'s| is) (?:your|the|a|"
+    r"an)|i(?:'ve| have)?\s+(?:made|created|generated|drawn|painted|rendered))\b[^.!?\n]{0,60}?"
+    r"\b(?:image|picture|painting|drawing|illustration|artwork|portrait|photo)s?\b",
+    re.IGNORECASE,
+)
+
+
+def claims_picture(text: str) -> bool:
+    return bool(_PICTURE_CLAIM.search(text))
 
 
 @dataclass
@@ -404,6 +419,7 @@ class CognitiveAgent:
             names=sorted(allowed) if allowed is not None else None, autonomous=ctx.autonomous
         )
         nudges = 0
+        picture_checked = False
         while True:
             guard.begin_step()
             tier = prefer or self.router.select(kind, ChatRequest(messages=outcome.transcript)).tier
@@ -455,6 +471,23 @@ class CognitiveAgent:
                 outcome.transcript.append(
                     Message.user(
                         "Your last turn had no reply in it. Say your reply now, in plain text."
+                    )
+                )
+                continue
+            if answer and not outcome.media and not picture_checked and claims_picture(answer):
+                # It said it made (or is making) a picture, but nothing was drawn. Small models do
+                # this a lot, often copying an earlier reply. One chance to do it or say so.
+                picture_checked = True
+                can_draw = any(t.name == "image_generate" for t in tools)
+                outcome.transcript.append(
+                    Message.user(
+                        "No picture has been made: image_generate hasn't run. If you want to make "
+                        "one, call image_generate now. Otherwise reply again without saying you "
+                        "made, are making or are showing a picture."
+                        if can_draw
+                        else "You can't make pictures right now: no image generator is set up on "
+                        "this server. Reply again and say so plainly. Don't claim to make, show or "
+                        "describe a picture you didn't make."
                     )
                 )
                 continue

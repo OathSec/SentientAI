@@ -717,3 +717,46 @@ async def test_when_it_chooses_what_to_do_it_sees_what_it_has(runtime_factory: A
     assert "What you have:" in seen[0]
     assert "1 things you built in it, most recently little hut" in seen[0]
     assert "newest: My lighthouse" in seen[0]
+
+
+async def test_a_reply_that_claims_a_picture_nobody_made_is_sent_back(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    brain = Brain(
+        [
+            "I can generate an image for you. Let me create a new digital image of my avatar!",
+            "I can't make pictures yet: there's no image generator set up here.",
+        ]
+    )
+    rt = await runtime_factory(brain)  # no image generator in tests
+    reply = await rt.chat("s1", "can you generate me an image", timeout=10)
+    assert reply.answer == "I can't make pictures yet: there's no image generator set up here."
+    nudge = brain.agent_requests[1].messages[-1].text
+    assert "You can't make pictures right now" in nudge
+
+
+async def test_when_it_can_draw_the_claim_becomes_a_real_picture(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    class Backend:
+        name = "fake"
+
+        async def generate(self, prompt: str, *, config: ImagesConfig) -> bytes:
+            return PNG
+
+        async def aclose(self) -> None:
+            pass
+
+    brain = Brain(
+        [
+            "Here's your picture of a sunset!",
+            call("image_generate", prompt="a sunset over a calm sea", caption="for you"),
+            "Here it is: a sunset over a calm sea.",
+        ]
+    )
+    rt = await runtime_factory(brain)
+    rt.c.images.backend = Backend()
+    reply = await rt.chat("s1", "draw me a sunset", timeout=10)
+    assert "call image_generate now" in brain.agent_requests[1].messages[-1].text
+    assert reply.answer == "Here it is: a sunset over a calm sea."
+    assert len(reply.media) == 1  # a real picture, shown with the reply
