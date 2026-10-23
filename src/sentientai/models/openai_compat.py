@@ -116,7 +116,7 @@ class OpenAICompatibleClient:
         }
         if native:
             payload["tools"] = [t.to_openai() for t in request.tools]
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = request.tool_choice or "auto"
         if request.json_mode:
             payload["response_format"] = {"type": "json_object"}
         if request.stop:

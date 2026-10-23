@@ -1164,3 +1164,41 @@ async def test_administrators_see_how_many_approvals_are_waiting(web_factory: An
     _, alice, _ = await person(w, "alice")
     assert (await admin.get("/api/auth/state")).json()["pending_approvals"] == 1
     assert (await alice.get("/api/auth/state")).json()["pending_approvals"] == 0
+
+
+async def test_the_chat_page_is_told_when_a_picture_is_being_made(web_factory: Any) -> None:
+    from sentientai.config import ImagesConfig
+
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00\x00\x00\x10" * 2 + b"\x00" * 16
+    release = asyncio.Event()
+
+    class Backend:
+        name = "slow"
+
+        async def generate(self, prompt: str, *, config: ImagesConfig) -> bytes:
+            await release.wait()
+            return png
+
+        async def aclose(self) -> None:
+            pass
+
+    w = await web_factory(
+        Brain([call("image_generate", prompt="a red kite over hills"), "Here's your kite."])
+    )
+    w.rt.c.images.backend = Backend()
+    _, alice, csrf = await person(w, "alice")
+    accepted = await post(alice, "/api/chat", csrf, json={"message": "draw me a kite"})
+    assert accepted.status_code == 202
+    cursor = accepted.json()["at"]
+    seen_drawing = False
+    for _ in range(200):
+        r = (await alice.get("/api/chat/poll", params={"after": cursor})).json()
+        if r["drawing"]:
+            seen_drawing = True
+            release.set()
+        if not r["busy"] and seen_drawing:
+            break
+        await asyncio.sleep(0.02)
+    assert seen_drawing
+    replies = [m for m in r["messages"] if m["role"] == "assistant"]
+    assert replies and replies[-1]["content"] == "Here's your kite." and replies[-1]["media"]

@@ -426,6 +426,7 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
         return {
             "busy": busy,
             "since": running[1].isoformat() if busy and running else None,
+            "drawing": busy and c.images.drawing_for(user.id),  # making a picture for them
             "messages": [message_json(m) for m in messages],
         }
 

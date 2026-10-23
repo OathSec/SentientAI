@@ -760,3 +760,50 @@ async def test_when_it_can_draw_the_claim_becomes_a_real_picture(
     assert "call image_generate now" in brain.agent_requests[1].messages[-1].text
     assert reply.answer == "Here it is: a sunset over a calm sea."
     assert len(reply.media) == 1  # a real picture, shown with the reply
+
+
+async def test_if_it_still_only_talks_about_drawing_it_is_made_to_draw(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class Backend:
+        name = "slow"
+
+        async def generate(self, prompt: str, *, config: ImagesConfig) -> bytes:
+            started.set()
+            await release.wait()
+            return PNG
+
+        async def aclose(self) -> None:
+            pass
+
+    brain = Brain(
+        [
+            "Let me create a picture for you!",
+            "I understand. Let me generate the image now.",
+            call("image_generate", prompt="a red kite over green hills"),
+            "Here it is: a red kite over green hills.",
+        ]
+    )
+    rt = await runtime_factory(brain)
+    rt.c.images.backend = Backend()
+    job = asyncio.create_task(rt.chat("s1", "generate me an image", timeout=10))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    assert rt.c.images.drawing_for(None)  # the chat page shows "making a picture" meanwhile
+    release.set()
+    reply = await job
+    forced = brain.agent_requests[2]
+    assert forced.tool_choice == "required" and [t.name for t in forced.tools] == ["image_generate"]
+    assert reply.answer == "Here it is: a red kite over green hills." and len(reply.media) == 1
+    assert not rt.c.images.drawing_for(None)
+
+
+async def test_a_second_false_picture_claim_without_a_generator_is_replaced(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    brain = Brain(["Here's your picture!", "I understand. Let me generate the image now."])
+    rt = await runtime_factory(brain)
+    reply = await rt.chat("s1", "generate me an image", timeout=10)
+    assert reply.answer.startswith("I can't make pictures yet")

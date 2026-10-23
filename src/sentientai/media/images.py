@@ -200,6 +200,7 @@ class ImageService:
         self.clock = clock or SystemClock()
         self.backend = backend if backend is not None else build_backend(config)
         self._gpu = asyncio.Lock()
+        self._drawing: dict[str | None, int] = {}  # who a picture is being made for right now
         if swap is None and self.backend is not None and config.swap_container:
             swap = GpuSwap(
                 config.swap_container, grace_s=config.swap_grace_s, socket=config.docker_socket
@@ -235,14 +236,35 @@ class ImageService:
             await self.audit.record("media.refused", actor=by, user_id=user_id, prompt=prompt)
             raise ImageError(refusal)
         await self._emit("media.generating", prompt=prompt[:200], user_id=user_id)
+        self._drawing[user_id] = self._drawing.get(user_id, 0) + 1
+        try:
+            data = await self._draw(prompt)
+        finally:
+            self._drawing[user_id] -= 1
+            if not self._drawing[user_id]:
+                del self._drawing[user_id]
+        if len(data) > self.config.max_bytes:
+            raise ImageError("the generated image is too large")
+        return await self._store(
+            data, prompt, user_id=user_id, public=public, caption=caption, by=by
+        )
+
+    def drawing_for(self, user_id: str | None) -> bool:
+        """Is a picture being made for this person right now?"""
+
+        return bool(self._drawing.get(user_id))
+
+    async def _draw(self, prompt: str) -> bytes:
+        assert self.backend is not None
         async with self._gpu:
             if self.swap is not None:
                 async with self.swap.borrow():
-                    data = await self.backend.generate(prompt, config=self.config)
-            else:
-                data = await self.backend.generate(prompt, config=self.config)
-        if len(data) > self.config.max_bytes:
-            raise ImageError("the generated image is too large")
+                    return await self.backend.generate(prompt, config=self.config)
+            return await self.backend.generate(prompt, config=self.config)
+
+    async def _store(
+        self, data: bytes, prompt: str, *, user_id: str | None, public: bool, caption: str, by: str
+    ) -> MediaRecord:
         mime, ext, width, height = sniff_image(data)
         record = MediaRecord(
             prompt=prompt,

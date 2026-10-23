@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -97,6 +97,8 @@ class ChatRequest(BaseModel):
     max_tokens: int | None = None
     json_mode: bool = False
     stop: list[str] | None = None
+    # "required" makes the model call one of ``tools`` (native tool calling only).
+    tool_choice: Literal["auto", "required", "none"] | None = None
 
 
 class Usage(BaseModel):

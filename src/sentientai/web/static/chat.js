@@ -10,6 +10,7 @@
   let typing = null;          // the "Fuzzy is typing" bubble
   let polling = null;
   let lastDay = null;
+  let drawing = false;        // the server says a picture is being made for this reply
 
   const dayKey = (iso) => new Date(iso).toDateString();
   const hhmm = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -55,10 +56,13 @@
     const started = since ? new Date(since).getTime() : Date.now();
     typing._timer = setInterval(() => {
       const s = Math.round((Date.now() - started) / 1000);
-      status.textContent = s >= 8 ? name + " is thinking… " + s + " s. You can leave; the reply will be here when you come back." : "";
+      status.textContent = drawing
+        ? name + " is making a picture… " + s + " s. It usually takes about a minute; you can leave and come back."
+        : s >= 8 ? name + " is thinking… " + s + " s. You can leave; the reply will be here when you come back." : "";
     }, 1000);
   }
   function hideTyping() {
+    drawing = false;
     if (typing) { clearInterval(typing._timer); typing.remove(); typing = null; }
     status.textContent = "";
   }
@@ -70,6 +74,7 @@
       try {
         const r = await api("/api/chat/poll?after=" + encodeURIComponent(cursor || new Date(0).toISOString()));
         append(r.messages);
+        drawing = !!r.drawing;
         if (!r.busy) stopPolling();
       } catch (e) { /* try again on the next tick */ }
     }, 1500);

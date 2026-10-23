@@ -419,7 +419,8 @@ class CognitiveAgent:
             names=sorted(allowed) if allowed is not None else None, autonomous=ctx.autonomous
         )
         nudges = 0
-        picture_checked = False
+        picture_checks = 0
+        force_picture = False
         while True:
             guard.begin_step()
             tier = prefer or self.router.select(kind, ChatRequest(messages=outcome.transcript)).tier
@@ -429,10 +430,18 @@ class CognitiveAgent:
                 reserve_output=self._reserve(tier),
             )
             response = await self.router.chat(
-                ChatRequest(messages=outcome.transcript, tools=tools, temperature=temperature),
+                ChatRequest(
+                    messages=outcome.transcript,
+                    tools=[t for t in tools if t.name == "image_generate"]
+                    if force_picture
+                    else tools,
+                    temperature=temperature,
+                    tool_choice="required" if force_picture else None,
+                ),
                 kind=kind,
                 prefer=prefer,
             )
+            force_picture = False
             usage = response.usage.total or estimate_tokens(response.message.text)
             guard.record_tokens(usage)
             message = response.message
@@ -474,23 +483,42 @@ class CognitiveAgent:
                     )
                 )
                 continue
-            if answer and not outcome.media and not picture_checked and claims_picture(answer):
+            if answer and not outcome.media and claims_picture(answer):
                 # It said it made (or is making) a picture, but nothing was drawn. Small models do
-                # this a lot, often copying an earlier reply. One chance to do it or say so.
-                picture_checked = True
+                # this a lot, often copying an earlier reply. First it gets a chance to do it or
+                # say so; if it claims it again and can draw, it is made to call the tool.
                 can_draw = any(t.name == "image_generate" for t in tools)
-                outcome.transcript.append(
-                    Message.user(
-                        "No picture has been made: image_generate hasn't run. If you want to make "
-                        "one, call image_generate now. Otherwise reply again without saying you "
-                        "made, are making or are showing a picture."
-                        if can_draw
-                        else "You can't make pictures right now: no image generator is set up on "
-                        "this server. Reply again and say so plainly. Don't claim to make, show or "
-                        "describe a picture you didn't make."
+                picture_checks += 1
+                if picture_checks == 2 and can_draw:
+                    force_picture = True
+                    outcome.transcript.append(
+                        Message.user(
+                            "Call image_generate now, describing the picture in its prompt."
+                        )
                     )
-                )
-                continue
+                    continue
+                if picture_checks > 1:
+                    answer = (
+                        "I meant to make that picture, but it didn't happen this time. "
+                        "Ask me again?"
+                        if can_draw
+                        else "I can't make pictures yet: there's no image generator set up on "
+                        "this server."
+                    )
+                    outcome.transcript[-1] = Message.assistant(answer)
+                else:
+                    outcome.transcript.append(
+                        Message.user(
+                            "No picture has been made: image_generate hasn't run. If you want to "
+                            "make one, call image_generate now. Otherwise reply again without "
+                            "saying you made, are making or are showing a picture."
+                            if can_draw
+                            else "You can't make pictures right now: no image generator is set up "
+                            "on this server. Reply again and say so plainly. Don't claim to make, "
+                            "show or describe a picture you didn't make."
+                        )
+                    )
+                    continue
             await self.audit.record(
                 "agent.answer", task_id=ctx.task_id, tier=str(response.tier), answer=answer
             )
