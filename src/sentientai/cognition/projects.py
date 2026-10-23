@@ -14,6 +14,7 @@ publishes ``mind.project`` events.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any, Literal
 
@@ -65,6 +66,10 @@ class ProjectBook:
         self.bus = bus
         self.clock = clock or SystemClock()
         self.max_active = max_active
+        # The whole book is one stored value: a change is read-modify-write, and a session's
+        # entry (written after a task) can land while a beat starts a new project. Without the
+        # lock one of the two would silently overwrite the other.
+        self._lock = asyncio.Lock()
 
     async def all(self) -> list[Project]:
         raw = await self.state.get(STATE_KEY)
@@ -110,18 +115,19 @@ class ProjectBook:
     async def start(self, title: str, why: str = "") -> Project | None:
         """A new project, or None if Fuzzy already holds as many as it can."""
 
-        if not await self.has_room():
-            return None
-        now = self.clock.now()
-        project = Project(
-            title=" ".join(title.split())[:200],
-            why=" ".join(why.split())[:1000],
-            created_at=now,
-            updated_at=now,
-        )
-        projects = await self.all()
-        projects.append(project)
-        await self._save(projects)
+        async with self._lock:
+            if not await self.has_room():
+                return None
+            now = self.clock.now()
+            project = Project(
+                title=" ".join(title.split())[:200],
+                why=" ".join(why.split())[:1000],
+                created_at=now,
+                updated_at=now,
+            )
+            projects = await self.all()
+            projects.append(project)
+            await self._save(projects)
         await self._publish(project, "started")
         return project
 
@@ -136,23 +142,24 @@ class ProjectBook:
     ) -> Project | None:
         """Add a notebook entry after a working session."""
 
-        projects = await self.all()
-        project = next((p for p in projects if p.id == project_id), None)
-        if project is None:
-            return None
-        now = self.clock.now()
-        text = entry.strip()[:8000]
-        if text:
-            project.entries.append(Entry(at=now, text=text, next_step=next_step.strip()[:2000]))
-            del project.entries[: max(0, len(project.entries) - MAX_ENTRIES)]
-        project.sessions += 1
-        project.next_step = next_step.strip()[:2000]
-        if summary.strip():
-            project.summary = summary.strip()[:6000]
-        if status in ("active", "paused", "done", "abandoned"):
-            project.status = status  # type: ignore[assignment]
-        project.updated_at = now
-        await self._save(projects)
+        async with self._lock:
+            projects = await self.all()
+            project = next((p for p in projects if p.id == project_id), None)
+            if project is None:
+                return None
+            now = self.clock.now()
+            text = entry.strip()[:8000]
+            if text:
+                project.entries.append(Entry(at=now, text=text, next_step=next_step.strip()[:2000]))
+                del project.entries[: max(0, len(project.entries) - MAX_ENTRIES)]
+            project.sessions += 1
+            project.next_step = next_step.strip()[:2000]
+            if summary.strip():
+                project.summary = summary.strip()[:6000]
+            if status in ("active", "paused", "done", "abandoned"):
+                project.status = status  # type: ignore[assignment]
+            project.updated_at = now
+            await self._save(projects)
         await self._publish(project, "entry")
         return project
 

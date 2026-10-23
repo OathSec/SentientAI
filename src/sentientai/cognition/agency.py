@@ -141,8 +141,13 @@ def _recent_lines(recent: list[ActivityRecord], groups: int = 8) -> str:
         lines.append(
             f"- {when} {a.kind}: {_text(a.intent, 240)}"
             # A run's outcome isn't shown: a stuck model copied it back word for word next time.
-            # The run itself still reads as a plain fact ("12 times in a row").
-            + (f" -> {_text(a.outcome, 360)}" if a.outcome and len(run) == 1 else "")
+            # The run itself still reads as a plain fact ("12 times in a row"). Failures keep
+            # theirs, since what went wrong is the useful part.
+            + (
+                f" -> {_text(a.outcome, 360)}"
+                if a.outcome and (len(run) == 1 or a.status is ActivityStatus.FAILED)
+                else ""
+            )
         )
         i += len(run)
     return "\n".join(lines)
@@ -516,7 +521,7 @@ class Agency:
                 "rest",
                 "tried to decide what to do next",
                 f"I wanted to do “{_text(data.get('choice'), 200)}”, which isn't something I can "
-                "do right now, so I rested.",
+                f"do right now (I can: {', '.join(options)}), so I rested.",
                 ActivityStatus.FAILED,
                 thinking=thinking,
             )
