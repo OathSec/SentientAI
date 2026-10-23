@@ -900,6 +900,63 @@ def memory_reindex() -> None:
     typer.echo(f"reindexed {asyncio.run(go())} memories")
 
 
+@app.command("reset-mind")
+def reset_mind_command(
+    keep_teachings: bool = typer.Option(
+        False, "--keep-teachings", help="Keep documents people taught it (as unread)."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Don't ask for confirmation."),
+) -> None:
+    """Start Fuzzy over: clears its memories, conversations, beliefs, feelings, relationships,
+    activities, goals, projects, world, body and gallery. Keeps accounts, invites and the audit
+    log. Run it with the daemon stopped."""
+    import httpx
+
+    from sentientai.runtime.reset import reset_mind
+    from sentientai.safety.audit import AuditLog
+
+    s = settings()
+    try:
+        httpx.get(f"http://127.0.0.1:{s.api.port}/health", timeout=2.0)
+    except httpx.HTTPError:
+        pass  # not running: good
+    else:
+        _fail(
+            f"{s.identity.name} is running. Stop it first, e.g. "
+            "`docker compose -f deploy/docker-compose.yml stop sentientai`, then run "
+            "`docker compose -f deploy/docker-compose.yml run --rm sentientai "
+            "sentientai reset-mind`."
+        )
+    if not yes:
+        typer.echo(
+            f"This permanently erases everything {s.identity.name} has lived through"
+            + (" (documents people taught it are kept)." if keep_teachings else ".")
+            + " Accounts and the audit log are kept."
+        )
+        typed = typer.prompt(f"Type {s.identity.name} to confirm")
+        if typed.strip() != s.identity.name:
+            _fail("not confirmed; nothing was changed")
+    s.ensure_directories()
+    key = s.safety.audit_hmac_key
+    audit = AuditLog(
+        s.audit_path,
+        hmac_key=key.get_secret_value().encode() if key else None,
+        fsync=s.safety.audit_fsync,
+        segment_max_bytes=s.safety.audit_segment_max_bytes,
+    )
+    cleared = asyncio.run(reset_mind(s, keep_teachings=keep_teachings, audit=audit))
+    for name, count in cleared.items():
+        if name != "reindex_needed":
+            typer.echo(f"  {name}: {count}")
+    if cleared.get("reindex_needed") and keep_teachings:
+        typer.echo("rebuilding the memory index for the kept teachings...")
+        memory_reindex()
+    typer.secho(
+        f"{s.identity.name}'s mind is clear. Start it again and it wakes up for the first time.",
+        fg="green",
+    )
+
+
 # ------------------------------------------------------------------ goals
 @goals_app.command("list")
 def goals_list() -> None:

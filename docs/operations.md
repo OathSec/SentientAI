@@ -128,6 +128,26 @@ older than your SLA.
 Vectors can always be rebuilt from Postgres: stop the daemon, then run
 `sentientai memory reindex`. Run `sentientai audit verify` after restoring.
 
+## Starting Fuzzy over
+
+`sentientai reset-mind` erases everything Fuzzy has lived through: memories and their vectors,
+conversations, its decisions about itself, feelings, relationships, activities, goals, projects, notes,
+tasks and approvals, its world (every object, its body, where it stands, and the ground size), its
+gallery (records and image files), its self-model and working memory. It keeps accounts, sessions,
+invites, usage counters, operator schedules and the audit log, which records the reset. Add
+`--keep-teachings` to keep documents people taught it. Files in the workspace are not touched.
+
+Back up first (see above), and stop the daemon: a running Fuzzy would write parts of its mind back.
+
+```bash
+docker compose -f deploy/docker-compose.yml exec -T postgres pg_dump -U sentient sentientai > fuzzy-backup.sql
+docker compose -f deploy/docker-compose.yml stop sentientai
+docker compose -f deploy/docker-compose.yml run --rm sentientai sentientai reset-mind
+docker compose -f deploy/docker-compose.yml up -d sentientai
+```
+
+It asks you to type Fuzzy's name to confirm (or pass `--yes`). On the next start it wakes up for the first time.
+
 ## Upgrades
 
 1. `sentientai kill "upgrade"`, wait for running tasks to stop, stop the service.
