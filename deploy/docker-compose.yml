@@ -173,7 +173,7 @@ services:
       -m /models/${FAST_MODEL:-fast.gguf}
       --host 0.0.0.0 --port 8002
       --n-gpu-layers 999 --ctx-size ${FAST_CTX_SIZE:-16384} --flash-attn ${FLASH_ATTN:-on}
-      --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel 2
+      --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${FAST_PARALLEL:-2}
 
   # One bigger model across BOTH cards (profile `bigmodel`, instead of `models`' two servers):
   # for example a 14B at Q4_K_M (~9 GB), layer-split over the 2070 and the 1660 Ti. Both of
@@ -197,7 +197,7 @@ services:
       --host 0.0.0.0 --port 8000
       --n-gpu-layers 999 --split-mode layer --tensor-split ${BIG_SPLIT:-6,8}
       --ctx-size ${BIG_CTX_SIZE:-24576} --flash-attn ${FLASH_ATTN:-on}
-      --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel 2
+      --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${FAST_PARALLEL:-2}
 
   # Embeddings on the CPU: tiny, and it keeps the GPUs' VRAM for the language models.
   llm-embed:
