@@ -833,3 +833,18 @@ async def test_the_open_ended_activity_is_on_offer_by_default(
     rt = await runtime_factory(Brain(), start=False)
     options = await rt.c.agency._options(await rt.c.interoception.sense(), {})
     assert "free" in options
+
+
+def test_a_corrected_reply_comes_back_without_the_instructions() -> None:
+    from sentientai.cognition.grounding import corrected_reply
+
+    echoed = (
+        "I'm doing well, thanks. I don't remember us talking about that.\n\n"
+        "Return only the rewritten reply."
+    )
+    assert corrected_reply(echoed) == (
+        "I'm doing well, thanks. I don't remember us talking about that."
+    )
+    tagged = "Sure.\n<reply>\nI'm good! How about you?\n</reply>\nWrite the corrected reply"
+    assert corrected_reply(tagged) == "I'm good! How about you?"
+    assert corrected_reply("<reply>Just this, unclosed") == "Just this, unclosed"

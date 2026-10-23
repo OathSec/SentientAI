@@ -112,7 +112,8 @@ safety:
 runtime:
   autonomy: proactive       # proactive: Fuzzy lives its own life when nobody needs it | reactive: only acts on requests
   idle_think_interval_s: 900   # how often operator-set goals are picked up
-  max_concurrent_tasks: 1   # one GPU-heavy task at a time
+  max_concurrent_tasks: 1   # Fuzzy's own projects at once (research, free time, goals)
+  max_concurrent_conversations: 4   # replies made at once; they never wait on its own work
   schedules:
     - name: morning-review
       cron: "30 8 * * 1-5"

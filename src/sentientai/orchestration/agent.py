@@ -271,6 +271,7 @@ class CognitiveAgent:
                 now=now,
                 beliefs=perspective.beliefs if perspective else "",
                 person=perspective.person if perspective else None,
+                conversation=task.kind == "chat",
             ),
             window=window,
             reserve_output=reserve,

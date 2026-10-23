@@ -268,7 +268,12 @@ class RuntimeConfig(BaseModel):
     tick_interval_s: float = Field(default=0.5, gt=0)
     idle_think_interval_s: float = Field(default=900.0, ge=10)
     checkpoint_interval_s: float = Field(default=30.0, ge=1)
-    max_concurrent_tasks: int = Field(default=1, ge=1)
+    max_concurrent_tasks: int = Field(
+        default=1, ge=1, description="Fuzzy's own projects (research, free time, goals) at once."
+    )
+    max_concurrent_conversations: int = Field(
+        default=4, ge=1, description="Replies being made at once; they never wait on its own work."
+    )
     max_intrinsic_goals: int = Field(default=3, ge=0)
     reflect_after_tasks: bool = True
     planning_min_chars: int = Field(default=280, ge=0)

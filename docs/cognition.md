@@ -94,6 +94,12 @@ up to it. Every activity is stored with its intent, its reason and its outcome, 
 page, and audited. Fuzzy's own activities pause when someone talks to it, and a failed activity is
 recorded, not fatal.
 
+**Three lanes, side by side.** Conversations start the moment someone writes and never wait for Fuzzy's own work.
+Its own projects (research, free time, goals; `runtime.max_concurrent_tasks` at once) run in their own lane, and
+its inner life (beats and memory upkeep, one at a time) carries on while a project runs. It just doesn't start a
+second project until the first is done, and its own beats pause while it is talking with someone. With two model
+servers, the inner life runs on the fast tier (the second GPU) and conversations and projects on the heavy tier.
+
 Nothing about a beat is silent. If the model's answer isn't in the expected shape, the words it did produce are kept
 as a thought; if it chooses something it can't do, or says nothing, that is recorded as a failed beat with what
 happened. The *Thinking* tab on the Brain page shows, for every choice, what the model produced while deciding.

@@ -17,7 +17,7 @@ def call(name: str, **arguments: Any) -> Message:
 # Prompt fragment -> name of the Brain script that answers it.
 _PROMPTS = {
     "Check a reply": "grounding",
-    "Rewrite this reply so it no longer claims": "revision",
+    "Correct a reply": "revision",
     "You just talked with": "appraisal",
     "you have some time to yourself": "beat",
     "You decided to think about this": "thought",

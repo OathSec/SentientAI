@@ -445,3 +445,52 @@ async def test_a_conversation_that_hits_a_limit_gets_a_natural_reply_not_a_statu
     [stop] = [t for t in closings if t.startswith("You must stop now")]
     assert "Reply to the person now" in stop and "what is incomplete or uncertain" not in stop
     assert reply.answer
+
+
+async def test_a_conversation_never_waits_for_fuzzys_own_project(runtime_factory: Any) -> None:
+    rt = await runtime_factory(Brain(["Hi! I'm here."]))
+    project = asyncio.create_task(asyncio.sleep(60))
+    rt._running["task_project"] = project  # a long project of its own is under way
+    rt._project_goals["task_project"] = "learn how tides work"
+    try:
+        assert rt.busy  # no room for a second project...
+        reply = await rt.chat("s1", "heyy", timeout=10)  # ...but a person is answered anyway
+        assert reply.answer == "Hi! I'm here."
+    finally:
+        project.cancel()
+        rt._running.pop("task_project", None)
+        rt._project_goals.pop("task_project", None)
+
+
+async def test_its_inner_life_goes_on_while_a_project_runs(runtime_factory: Any) -> None:
+    rt = await runtime_factory(Brain(), start=False, runtime={"autonomy": "proactive"})
+    project = asyncio.create_task(asyncio.sleep(60))
+    rt._running["task_project"] = project
+    rt._project_goals["task_project"] = "learn how tides work"
+    try:
+        rt._next_beat = 0.0
+        await rt.cycle()
+        assert rt._activities, "a beat should start even though a project is running"
+        options = await rt.c.agency._options(await rt.c.interoception.sense(), {})
+        assert "think" in options
+        assert not {"free", "research", "pursue_goal"} & set(options)  # one project at a time
+    finally:
+        project.cancel()
+        rt._running.pop("task_project", None)
+        rt._project_goals.pop("task_project", None)
+        for handle in list(rt._activities):
+            handle.cancel()
+
+
+async def test_a_conversation_is_told_to_keep_its_background_in_the_background(
+    runtime_factory: Any,
+) -> None:
+    brain = Brain(["I'm good, thanks!"])
+    rt = await runtime_factory(brain)
+    await rt.chat("s1", "how are you?", timeout=10)
+    system = brain.agent_requests[0].messages[0].text
+    assert "## Talking with someone" in system
+    assert "doesn't recite their to-do list" in system
+    task = await rt.submit("Summarise the notes")
+    await rt.wait(task.id, timeout=10)
+    assert "## Talking with someone" not in brain.agent_requests[-1].messages[0].text

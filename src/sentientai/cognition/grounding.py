@@ -14,6 +14,7 @@ corrected rather than allowed to quietly change who Fuzzy is.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from sentientai import prompts
@@ -37,6 +38,23 @@ class GroundingResult:
     contradictions: list[str] = field(default_factory=list)
     new_beliefs: list[str] = field(default_factory=list)
     revised: bool = False
+
+
+_REPLY_TAGS = re.compile(r"<reply>\s*(.*?)\s*(?:</reply>|$)", re.DOTALL | re.IGNORECASE)
+_ECHOED_INSTRUCTIONS = re.compile(
+    r"^\s*(return only the rewritten reply|write the corrected reply\b.*|"
+    r"(here is )?the (corrected|rewritten) reply)[.:]?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def corrected_reply(text: str) -> str:
+    """The reply out of a revision, without any of the instructions echoed back."""
+
+    found = _REPLY_TAGS.findall(text)
+    body = found[-1] if found else text
+    body = _ECHOED_INSTRUCTIONS.sub("", body.replace("</reply>", "").replace("<reply>", ""))
+    return body.strip()
 
 
 class Grounding:
@@ -133,7 +151,7 @@ class Grounding:
                     ),
                     kind=TaskKind.CHAT,
                 )
-                text = revised.message.text.strip()
+                text = corrected_reply(revised.message.text)
                 if text:
                     result.reply = text
                     result.revised = True

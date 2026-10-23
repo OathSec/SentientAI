@@ -70,6 +70,11 @@ class Runtime:
         self._wake = asyncio.Event()
         self._background: list[asyncio.Task[Any]] = []
         self._running: dict[str, asyncio.Task[Any]] = {}
+        # Fuzzy's mind has three lanes that run side by side: conversations (never kept waiting),
+        # its own projects (``max_concurrent_tasks`` at a time) and its inner life (one beat or
+        # bit of upkeep at a time, which carries on while a project runs).
+        self._conversations: set[str] = set()
+        self._project_goals: dict[str, str] = {}
         self._activities: set[asyncio.Task[Any]] = set()
         # Short follow-up thinking (e.g. forming an opinion of someone after a chat). It never
         # holds up the next conversation, but stops with the kill switch and at shutdown.
@@ -86,6 +91,7 @@ class Runtime:
         components.bus.subscribe("safety.kill_switch.*", lambda _event: self._update_gauges())
         components.agency.submit_task = self.submit
         components.agency.pursue_goal = self._pursue_goal
+        components.agency.current_project = self._current_project
 
     @classmethod
     async def create(
@@ -443,9 +449,30 @@ class Runtime:
 
     @property
     def busy(self) -> bool:
-        return (
-            len(self._running) + len(self._activities) >= self.settings.runtime.max_concurrent_tasks
-        )
+        """No room for another project (conversations and inner life have their own lanes)."""
+
+        return self._projects_running() >= self.settings.runtime.max_concurrent_tasks
+
+    def _projects_running(self) -> int:
+        return sum(1 for task_id in self._running if task_id not in self._conversations)
+
+    def _current_project(self) -> str | None:
+        """What Fuzzy is working on in the background right now, if anything."""
+
+        for task_id in self._running:
+            if task_id not in self._conversations:
+                return self._project_goals.get(task_id, "something you started")
+        return None
+
+    def _lane_free(self, percept: Any) -> bool:
+        kind = percept.kind
+        if kind == "task":
+            if percept.payload.get("chat"):
+                return len(self._conversations) < self.settings.runtime.max_concurrent_conversations
+            return not self.busy
+        if kind == "goal":
+            return not self.busy
+        return not self._activities  # drive (a beat) or maintenance: inner life, one at a time
 
     async def _perceive(self) -> None:
         c = self.c
@@ -464,6 +491,7 @@ class Runtime:
                 salience=salience,
                 key=f"task:{task.id}",
                 task_id=task.id,
+                chat=task.kind == "chat",
             )
         for percept in ws.percepts():
             if percept.kind == "task" and percept.payload.get("task_id") not in pending_ids:
@@ -483,9 +511,10 @@ class Runtime:
             if percept.source == "safety" and percept.key and percept.key not in open_keys:
                 ws.retract(percept_id=percept.id)
 
-        idle = not self._running and not self._activities
+        talking = bool(self._conversations)  # its attention is on someone
+        inner_free = not self._activities
         now = c.clock.monotonic()
-        if idle and rt.autonomy == "proactive":
+        if not self.busy and not talking and rt.autonomy == "proactive":
             for goal in await c.goals.active():
                 if goal.origin is not GoalOrigin.OPERATOR:
                     continue  # Fuzzy's own goals are its to pick up (see Agency)
@@ -499,16 +528,26 @@ class Runtime:
                         ttl_s=rt.tick_interval_s * 6,
                         goal_id=goal.id,
                     )
-            if now >= self._next_beat and c.mind.affect.energy > 0.05:
-                ws.submit(
-                    source="drive",
-                    kind="drive",
-                    content="time to yourself: notice how you feel and decide what to do",
-                    salience=0.3 + 0.3 * c.mind.affect.arousal,
-                    key="drive:live",
-                    ttl_s=rt.tick_interval_s * 6,
-                )
-        if idle and now - self._last_consolidation > self.settings.memory.consolidation_interval_s:
+        if (
+            inner_free
+            and not talking
+            and rt.autonomy == "proactive"
+            and now >= self._next_beat
+            and c.mind.affect.energy > 0.05
+        ):
+            ws.submit(
+                source="drive",
+                kind="drive",
+                content="time to yourself: notice how you feel and decide what to do",
+                salience=0.3 + 0.3 * c.mind.affect.arousal,
+                key="drive:live",
+                ttl_s=rt.tick_interval_s * 6,
+            )
+        if (
+            inner_free
+            and not talking
+            and now - self._last_consolidation > self.settings.memory.consolidation_interval_s
+        ):
             ws.submit(
                 source="memory",
                 kind="maintenance",
@@ -522,7 +561,7 @@ class Runtime:
         c = self.c
         ws = c.mind.workspace
         for percept in list(ws.conscious):
-            if not percept.actionable or self.busy:
+            if not percept.actionable or not self._lane_free(percept):
                 continue
             ws.attend(percept)
             if percept.kind == "task":
@@ -545,9 +584,15 @@ class Runtime:
     def _start_task(self, task: TaskRecord) -> None:
         handle = asyncio.create_task(self._execute(task), name=f"task:{task.id}")
         self._running[task.id] = handle
+        if task.kind == "chat":
+            self._conversations.add(task.id)
+        else:
+            self._project_goals[task.id] = task.metadata.get("activity_intent") or task.goal[:200]
 
         def done(_: asyncio.Task[Any]) -> None:
             self._running.pop(task.id, None)
+            self._conversations.discard(task.id)
+            self._project_goals.pop(task.id, None)
             self._wake.set()
 
         handle.add_done_callback(done)

@@ -45,6 +45,18 @@ OPERATING_RULES = """\
 - When you're done, reply directly (no tool call).
 Current time: {now} UTC."""
 
+CONVERSATION_GUIDE = """\
+## Talking with someone
+- Answer what they actually said, thoughtfully and specifically. Think about what they mean.
+- Everything above (your continuity, feelings, awareness, goals) and the memories below is your
+  own background. Bring something up only when it really connects to what they said, the way a
+  person asked "how are you?" doesn't recite their to-do list. Most memories that came to mind
+  will have nothing to do with this message: ignore those.
+- Match the length to the message: a greeting gets a sentence or two; a real question gets a
+  real answer.
+- You're not an assistant waiting for orders. Don't close with offers like "How can I help you
+  today?" unless you actually mean it."""
+
 
 @dataclass
 class FramingInputs:
@@ -61,6 +73,7 @@ class FramingInputs:
     now: datetime
     beliefs: str = ""
     person: str | None = None
+    conversation: bool = False
 
 
 class ContextBuilder:
@@ -111,6 +124,8 @@ class ContextBuilder:
             f"## Goals\n{inputs.goals}",
             OPERATING_RULES.format(now=inputs.now.strftime("%Y-%m-%d %H:%M")),
         ]
+        if inputs.conversation:
+            sections.append(CONVERSATION_GUIDE)
         if summary_turns:
             sections.append(
                 "## Earlier in this conversation\n" + "\n".join(t.content for t in summary_turns)
@@ -120,7 +135,11 @@ class ContextBuilder:
             inputs.procedures, memory_budget // 3, "Procedures that worked before"
         )
         memory_section = self._memories_section(
-            inputs.memories, memory_budget - estimate_tokens(procedure_section), "Relevant memories"
+            inputs.memories,
+            memory_budget - estimate_tokens(procedure_section),
+            "Memories that came to mind (found automatically; use only what fits)"
+            if inputs.conversation
+            else "Relevant memories",
         )
         sections += [s for s in (procedure_section, memory_section) if s]
         if inputs.plan:

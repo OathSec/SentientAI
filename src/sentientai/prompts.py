@@ -311,14 +311,16 @@ Return ONLY JSON:
 {{"unsupported": ["claim", ...], "new_self_decisions": [{{"aspect": "short_key", "value": "...", "reasoning": "..."}}]}}"""
 
 REVISE_REPLY = """\
-Rewrite this reply so it no longer claims the things listed below, which {name} doesn't actually
-know or which contradict what it decided about itself. Where it matters, say plainly that you
-don't remember, or ask. Keep everything else, the same voice and roughly the same length.
+Correct a reply {name} is about to send, so it no longer claims the things listed below ({name}
+doesn't actually know them, or they contradict what it decided about itself). Where it matters,
+say plainly that you don't remember, or ask. Change as little as possible: keep the same voice and
+roughly the same length, and add nothing new.
 
 Problems:
 {problems}
 
-Reply:
+<reply>
 {reply}
+</reply>
 
-Return only the rewritten reply."""
+Write the corrected reply between <reply> and </reply> and nothing else."""

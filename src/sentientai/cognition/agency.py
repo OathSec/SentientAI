@@ -168,6 +168,8 @@ class Agency:
         # Set by the runtime: start a background task / work on a goal.
         self.submit_task: Callable[..., Awaitable[Any]] | None = None
         self.pursue_goal: Callable[[str], Awaitable[None]] | None = None
+        # Set by the runtime: what it's working on in the background, if anything.
+        self.current_project: Callable[[], str | None] | None = None
         bus.subscribe("ingest.completed", self._on_ingest)
         bus.subscribe("safety.kill_switch.*", self._on_kill_switch)
 
@@ -320,6 +322,11 @@ class Agency:
         active = await self.goals.active()
         if active and self.pursue_goal is not None:
             available.add("pursue_goal")
+        project = self.current_project() if self.current_project is not None else None
+        if project:
+            # It is already working on something; it can keep thinking, but not start another.
+            available -= {"research", "free", "pursue_goal"}
+            self.note(f"You're in the middle of something you started: {project}")
         if await self.goals.intrinsic_slots() > 0:
             available.add("new_goal")
         return [k for k in DESCRIPTIONS if k in available and k in allowed]
