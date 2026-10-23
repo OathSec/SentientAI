@@ -406,6 +406,7 @@ class CognitiveAgent:
                     temperature=0.7,
                     json_mode=True,
                     max_tokens=500,
+                    snippet=True,
                 ),
                 kind=TaskKind.CHAT,
             )

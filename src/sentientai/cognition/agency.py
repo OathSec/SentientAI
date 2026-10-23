@@ -31,6 +31,7 @@ from sentientai.cognition.goals import GoalManager
 from sentientai.cognition.intentions import Intentions
 from sentientai.cognition.interoception import BodySignals, Interoception
 from sentientai.cognition.outside import OutsideWorld
+from sentientai.cognition.patches import PatchBook
 from sentientai.cognition.privacy import Redactor
 from sentientai.cognition.projects import Project, ProjectBook
 from sentientai.cognition.self_model import SelfModel, humanize_duration
@@ -282,6 +283,9 @@ class Agency:
         self.clock = clock or SystemClock()
         self.outside = outside or OutsideWorld(enabled=False)
         self.intentions = intentions or Intentions(db.state, clock=self.clock)
+        self.patches = PatchBook(db.state, max_held=settings.mind.max_patches, clock=self.clock)
+        # Set by the runtime: is a lent computer free to think for it right now?
+        self.helper_free: Callable[[], bool] | None = None
         self._rng = rng or random.Random()  # noqa: S311 - variety, not security
         self._happenings: deque[str] = deque(maxlen=30)
         self.beats = 0  # beats since boot (the runtime refreshes the life story every so many)
@@ -515,6 +519,7 @@ class Agency:
             signals=signals.describe(),
             events="\n".join(self._happenings) or "- nothing in particular",
             intentions=self.intentions.render(await self.intentions.active()),
+            patches=PatchBook.render(seen_patches := await self.patches.active()),
             recent=_recent_lines(recent) or "- nothing yet: this is your first time to yourself",
             people="\n".join(known) or "- nobody yet",
             goals=GoalManager.render(await self.goals.active()),
@@ -537,6 +542,11 @@ class Agency:
         )
         data = extract_object(response.message.text)
         self._happenings.clear()
+        if seen_patches:
+            # Seen once is enough: they're kept as faint thoughts so none is lost, and retired.
+            for patch in seen_patches:
+                await self._keep(patch.text, MemoryKind.THOUGHT, importance=0.15, person=None)
+            await self.patches.retire([p.id for p in seen_patches])
         if not data:
             raise Unparsed(response.message.text)
         thinking = _prose(
@@ -605,6 +615,52 @@ class Agency:
             thinking=thinking,
             promise=promise,
         )
+
+    async def ponder(self) -> int:
+        """Think quietly, on a lent computer, and leave some thought patches for the next beat.
+
+        Only runs when a helper is free (it never uses this server's own model), and only from
+        shared memories with names removed. Returns how many patches it made."""
+
+        if self.helper_free is None or not self.helper_free():
+            return 0
+        seeds = await self.db.memories.sample(
+            4,
+            kinds=[MemoryKind.FACT, MemoryKind.REFLECTION, MemoryKind.DOCUMENT, MemoryKind.EPISODE],
+        )
+        recent = await self.memory.timeline(
+            [MemoryKind.REFLECTION, MemoryKind.THOUGHT], limit=6, scope=Scope()
+        )
+        shared = await self.redactor.shared()
+        lines = distinct([shared(m.content[:600]) for m in [*seeds, *recent[:3]]])
+        if not lines:
+            return 0
+        response = await self.router.chat(
+            ChatRequest(
+                messages=[
+                    Message.user(
+                        prompts.PONDER.format(
+                            name=self.name,
+                            memories="\n".join(f"- {line}" for line in lines[:6]),
+                            count=3,
+                        )
+                    )
+                ],
+                temperature=0.9,
+                json_mode=True,
+                max_tokens=600,
+            ),
+            kind=TaskKind.PONDER,
+        )
+        data = extract_object(response.message.text) or {}
+        raw = data.get("thoughts")
+        thoughts = (
+            [shared(_text(t, 400)) for t in raw if isinstance(t, str)]
+            if isinstance(raw, list)
+            else []
+        )
+        made = await self.patches.add(thoughts[:4])
+        return len(made)
 
     async def _on_mind(self) -> str:
         """Its latest thoughts, insights and questions, so one idea can lead to the next."""

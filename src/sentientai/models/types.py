@@ -36,6 +36,9 @@ class TaskKind(StrEnum):
     CODE = "code"
     PLAN = "plan"
     IMPROVE = "improve"
+    PONDER = (
+        "ponder"  # quiet background thinking that helper computers do (see cognition/patches.py)
+    )
 
 
 class ToolCall(BaseModel):
@@ -97,6 +100,13 @@ class ChatRequest(BaseModel):
     max_tokens: int | None = None
     json_mode: bool = False
     stop: list[str] | None = None
+    # Set by the router for the kinds of work that may run on a lent computer's model
+    # (models.routing.worker_task_kinds). Replies to people never are.
+    background: bool = False
+    # A step around a conversation (deciding whether to talk, checking a reply, judging a person
+    # afterwards): a computer running the SAME model as this server's chat model may do it, which
+    # keeps the quality. Never set for other models.
+    snippet: bool = False
     # Drop tokens less than this fraction as likely as the best one (llama.cpp, vLLM): keeps a
     # hot temperature coherent. Only sent when set.
     min_p: float | None = None

@@ -73,6 +73,7 @@ const NAV = [
   ["/brain", "Brain", (s) => s.signed_in || s.public_pages],
   ["/world", "World", (s) => s.signed_in || s.public_pages],
   ["/gallery", "Gallery", (s) => s.signed_in || s.public_pages],
+  ["/compute", "Compute", (s) => s.signed_in],
   ["/teach", "Teach", (s) => s.signed_in && s.user && s.user.can_teach],
   ["/you", "You", (s) => s.signed_in],
   ["/admin", "Admin", (s) => s.admin],

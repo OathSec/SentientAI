@@ -193,6 +193,10 @@ class ModelRouter:
         confidence: float | None = None,
     ) -> ChatResponse:
         await self._yield_to_conversations()
+        if kind.value in self.config.worker_task_kinds:
+            request = request.model_copy(update={"background": True})
+        elif kind is TaskKind.CHAT and self.config.replies_on_matching_workers:
+            request = request.model_copy(update={"snippet": True})  # same-model computers only
         decision = self.select(kind, request, prefer=prefer, confidence=confidence)
         order = [decision.tier]
         if self.config.fallback_to_other_tier:

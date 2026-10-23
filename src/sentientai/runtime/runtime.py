@@ -97,6 +97,7 @@ class Runtime:
         components.agent.activities = components.db.activities
         components.agent.users = components.db.users
         components.agent.intentions = components.agency.intentions
+        components.agency.helper_free = lambda: components.workers.available("llm")
 
     @classmethod
     async def create(
@@ -148,6 +149,7 @@ class Runtime:
             },
         )
         self._spawn(self._main_loop(), "main-loop")
+        self._spawn(self._ponder_loop(), "ponder")
         self._spawn(self._checkpoint_loop(), "checkpoint")
         self._spawn(c.kill_switch.watch(), "kill-switch-watch")
         self._spawn(c.world.run(), "world")
@@ -474,6 +476,22 @@ class Runtime:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._wake.wait(), timeout=tick)
             self._wake.clear()
+
+    async def _ponder_loop(self) -> None:
+        """While a lent computer is free and nobody is talking, let it think for Fuzzy."""
+
+        every = self.settings.mind.ponder_every_s
+        while not self._stopping.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stopping.wait(), timeout=every)
+            if self._stopping.is_set():
+                break
+            if self.c.kill_switch.engaged or self._conversations:
+                continue
+            try:
+                await self.c.agency.ponder()
+            except Exception:
+                log.exception("background thinking failed")
 
     async def cycle(self) -> None:
         """One perceive -> attend -> act iteration (public for tests and tooling)."""

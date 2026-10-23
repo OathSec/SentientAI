@@ -17,6 +17,7 @@ PAGES = {
     "/gallery": "gallery.html",
     "/you": "you.html",
     "/teach": "teach.html",
+    "/compute": "compute.html",
     "/admin": "admin.html",
 }
 

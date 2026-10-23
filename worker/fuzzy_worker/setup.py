@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import ctypes
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -65,6 +67,60 @@ def make_code(server: str, token: str) -> str:
 
 
 # ------------------------------------------------------------------------- ollama
+_OLLAMA_PROGRAMS = ("ollama app.exe", "ollama.exe")
+
+
+def tidy_ollama_windows() -> int:
+    """Close the windows Ollama opens for itself (its welcome and setup guide).
+
+    Ollama keeps running in the tray after its window is closed, so this only gets the window
+    out of the way. Returns how many windows it dealt with. Windows only; harmless elsewhere."""
+
+    if sys.platform != "win32":
+        return 0
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32  # type: ignore[attr-defined]
+    handled = 0
+
+    def image_name(pid: int) -> str:
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ""
+        try:
+            size = ctypes.c_uint(1024)
+            buf = ctypes.create_unicode_buffer(1024)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                return Path(buf.value).name.lower()
+            return ""
+        finally:
+            kernel32.CloseHandle(handle)
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def visit(hwnd: int, _: int) -> bool:
+        nonlocal handled
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        pid = ctypes.c_uint()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if image_name(pid.value) in _OLLAMA_PROGRAMS:
+            user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE: Ollama hides to the tray
+            user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE, in case it ignores the close
+            handled += 1
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return handled
+
+
+def keep_ollama_quiet(seconds: float = 25.0) -> None:
+    """Right after installing or starting Ollama its window appears a moment late: keep
+    closing it for a short while."""
+
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        tidy_ollama_windows()
+        time.sleep(1.0)
+
+
 def find_ollama() -> Path | None:
     local = os.environ.get("LOCALAPPDATA", "")
     for candidate in (
@@ -97,6 +153,7 @@ def start_ollama(path: Path, client: httpx.Client, report: Report) -> None:
         creationflags=NO_WINDOW,
     )
     for _ in range(40):
+        tidy_ollama_windows()
         if is_running(client):
             return
         time.sleep(0.5)
@@ -151,7 +208,13 @@ def install_ollama(client: httpx.Client, report: Report) -> Path:
         if not signed_by_ollama(exe):
             raise SetupError("The Ollama installer's signature didn't check out, so I stopped.")
         report("Installing Ollama (a minute or two)", None)
-        result = subprocess.run([str(exe), "/SILENT", "/NORESTART"], check=False, timeout=900)
+        quiet = threading.Thread(target=keep_ollama_quiet, args=(60.0,), daemon=True)
+        quiet.start()  # its own setup window would otherwise pop up over this program
+        result = subprocess.run(
+            [str(exe), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOCANCEL"],
+            check=False,
+            timeout=900,
+        )
         if result.returncode != 0:
             raise SetupError(f"The Ollama installer failed (code {result.returncode}).")
     found = find_ollama()
@@ -193,14 +256,18 @@ def pull_model(client: httpx.Client, tag: str, report: Report) -> None:
         raise SetupError(f"The download of {tag} was interrupted ({type(exc).__name__}).") from exc
 
 
-def make_variant(ollama: Path, tag: str, report: Report) -> str:
-    """The same model with a context window big enough for Fuzzy's long prompts."""
+def make_variant(
+    ollama: Path, tag: str, report: Report, *, name: str | None = None, parameters: str = ""
+) -> str:
+    """The same model with the settings Fuzzy needs (by default a context window big enough
+    for its long prompts)."""
 
-    name = "fuzzy-" + tag.replace(":", "-")
+    name = name or "fuzzy-" + tag.replace(":", "-")
     report("Tuning the model for Fuzzy", None)
     with tempfile.TemporaryDirectory(prefix="fuzzy-worker-") as tmp:
         modelfile = Path(tmp) / "Modelfile"
-        modelfile.write_text(f"FROM {tag}\nPARAMETER num_ctx {CONTEXT}\n", encoding="utf-8")
+        extra = parameters or f"PARAMETER num_ctx {CONTEXT}\n"
+        modelfile.write_text(f"FROM {tag}\n{extra}", encoding="utf-8")
         result = subprocess.run(
             [str(ollama), "create", name, "-f", str(modelfile)],
             capture_output=True,
@@ -236,6 +303,36 @@ def check_answers(client: httpx.Client, model: str, report: Report) -> str:
         raise SetupError(f"The model didn't answer ({type(exc).__name__}).") from exc
 
 
+EMBED_TAG = "nomic-embed-text"  # the model Fuzzy's own memory search uses (768 numbers per text)
+
+
+def thread_count(cpu_percent: int) -> int:
+    return max(1, round((os.cpu_count() or 2) * max(5, min(100, cpu_percent)) / 100))
+
+
+def set_up_cpu(config: Config, ollama: Path, client: httpx.Client, report: Report) -> str:
+    """The processor job: a small search-vector model, limited to the share of the CPU chosen."""
+
+    if not have_model(client, EMBED_TAG):
+        pull_model(client, EMBED_TAG, report)
+    threads = thread_count(config.cpu_percent)
+    name = make_variant(
+        ollama,
+        EMBED_TAG,
+        report,
+        name="fuzzy-embed",
+        parameters=f"PARAMETER num_thread {threads}\n",
+    )
+    r = client.post(
+        OLLAMA_URL + "/v1/embeddings", json={"model": name, "input": ["test"]}, timeout=300.0
+    )
+    r.raise_for_status()
+    if len(r.json()["data"][0]["embedding"]) != 768:
+        raise SetupError("The search-vector model gave the wrong size of answer.")
+    config.embed_model = name
+    return f"Processor sharing is ready ({threads} threads)."
+
+
 # ------------------------------------------------------------------- the whole thing
 def run_setup(
     config: Config,
@@ -265,8 +362,13 @@ def run_setup(
         config.run_llm = True
         config.llm_url = OLLAMA_URL + "/v1"
         config.llm_model = variant
+        config.llm_base = tag
+        extra = ""
+        if config.use_cpu:
+            extra = " " + set_up_cpu(config, ollama, client, report)
+        keep_ollama_quiet(2.0)
         report("All set", 1.0)
-        return f"{variant} is ready. It said: {reply}"
+        return f"{variant} is ready. It said: {reply}.{extra}"
     finally:
         if own:
             client.close()

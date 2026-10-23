@@ -21,6 +21,7 @@ class PollIn(BaseModel):
     capabilities: list[str] = Field(default_factory=list, max_length=8)
     info: dict[str, Any] = Field(default_factory=dict)
     protocol: int = PROTOCOL
+    wait: float = Field(default=POLL_WAIT_S, ge=1.0, le=POLL_WAIT_S)  # how long to hold the call
 
 
 class ResultIn(BaseModel):
@@ -55,6 +56,18 @@ def build_worker_router(
 
     Worker = Annotated[WorkerRecord, Depends(worker)]
 
+    @router.post("/hello")
+    async def hello(record: Worker) -> dict[str, Any]:
+        """The program checks that a code is real before it says it is linked."""
+
+        return {
+            "linked": True,
+            "name": record.name,
+            "trust": record.trust,
+            "account_linked": record.owner_id is not None,
+            "protocol": PROTOCOL,
+        }
+
     @router.post("/poll")
     async def poll(body: PollIn, record: Worker) -> dict[str, Any]:
         if body.protocol != PROTOCOL:
@@ -64,7 +77,7 @@ def build_worker_router(
         if now - last_written.get(record.id, -1e9) > SEEN_EVERY_S:
             last_written[record.id] = now
             await registry.seen(record.id)
-        job = await hub.poll(record, caps, _small_info(body.info), wait_s=wait_s)
+        job = await hub.poll(record, caps, _small_info(body.info), wait_s=min(wait_s, body.wait))
         if job is None:
             return {"job": None}
         await audit.record(

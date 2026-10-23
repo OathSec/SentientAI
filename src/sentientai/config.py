@@ -94,6 +94,19 @@ class RoutingConfig(BaseModel):
     complexity_token_threshold: int = Field(default=3000, ge=0)
     escalate_below_confidence: float = Field(default=0.45, ge=0.0, le=1.0)
     fallback_to_other_tier: bool = True
+    worker_task_kinds: list[str] = Field(
+        default_factory=lambda: ["ponder"],
+        description="Which kinds of model call may run on a lent computer's model. Default: only "
+        "'ponder', Fuzzy's quiet background thinking. Its replies to people and its own "
+        "decisions stay on this server's own models, so a smaller model elsewhere can't make "
+        "them worse. Add kinds (e.g. 'assess', 'summarize') to offload more.",
+    )
+    replies_on_matching_workers: bool = Field(
+        default=False,
+        description="Also let computers running the same model as the server's chat model "
+        "(workers.chat_model) write whole replies. Off: the server always writes the reply and "
+        "they only do the steps around it.",
+    )
     circuit_failure_threshold: int = Field(default=3, ge=1)
     circuit_cooldown_s: float = Field(default=60.0, ge=0)
     background_yield_s: float = Field(
@@ -338,6 +351,14 @@ class MindConfig(BaseModel):
         default=True, description="Check each reply against memory before sending it."
     )
     appraise_relationships: bool = True
+    ponder_every_s: float = Field(
+        default=90.0,
+        ge=10,
+        description="While a lent computer is free, how often it thinks in the background and "
+        "hands Fuzzy a few thought patches (never about people; Fuzzy decides what to do "
+        "with them).",
+    )
+    max_patches: int = Field(default=12, ge=1, description="Thought patches held at once.")
     choose_to_talk: bool = Field(
         default=True,
         description="Before answering a message, Fuzzy decides whether it wants to talk now, "
@@ -403,6 +424,20 @@ class MindConfig(BaseModel):
         ],
         description="What Fuzzy may choose to do when nobody needs it. 'own' lets it do anything "
         "else it comes up with, in its own words (the rest are suggestions it is shown).",
+    )
+
+
+class WorkersConfig(BaseModel):
+    """Computers people lend to Fuzzy (see docs/workers.md)."""
+
+    download_url: str = Field(
+        default="", description="Where people download the Windows program (shown on /compute)."
+    )
+    max_per_person: int = Field(default=5, ge=0, description="Computers one account may link.")
+    chat_model: str = Field(
+        default="qwen3:14b",
+        description="The model this server answers conversations with, named as Ollama names it. "
+        "Only computers running this same model may take pieces of a conversation.",
     )
 
 
@@ -538,6 +573,7 @@ class Settings(BaseSettings):
     accounts: AccountsConfig = Field(default_factory=AccountsConfig)
     mind: MindConfig = Field(default_factory=MindConfig)
     images: ImagesConfig = Field(default_factory=ImagesConfig)
+    workers: WorkersConfig = Field(default_factory=WorkersConfig)
     world: WorldConfig = Field(default_factory=WorldConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 

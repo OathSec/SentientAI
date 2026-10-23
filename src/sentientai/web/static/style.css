@@ -226,3 +226,24 @@ blockquote { margin: 0 0 0.5rem; padding: 0.1rem 0 0.1rem 0.7rem; border-left: 3
 .temp.hot { color: var(--warn); }
 .temp.warn { color: var(--warn); font-weight: 700; }
 h3.mt-xs { font-size: 0.8rem; color: var(--muted); }
+
+/* Compute page */
+.tiles, .stats { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); margin: 0.75rem 0 1rem; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0.6rem 0.8rem; }
+.stats .tile { background: var(--soft); }
+.tile .num { font-size: 1.4rem; font-weight: 650; line-height: 1.2; }
+.gpus { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); }
+.gpu, .computer { border: 1px solid var(--line); border-radius: 4px; padding: 0.7rem 0.8rem; background: var(--panel); }
+.computer { margin-bottom: 0.75rem; }
+.gpu .meter, .computer .meter { margin: 0.4rem 0; }
+.chip { display: inline-block; padding: 0.05rem 0.55rem; border-radius: 1rem; font-size: 0.75rem; border: 1px solid var(--line); color: var(--muted); }
+.chip.on { border-color: var(--accent); color: var(--accent); }
+.chip.busy { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.chip.off { color: var(--muted); }
+.leaders { margin: 0.5rem 0; padding-left: 1.4rem; }
+.leaders li { padding: 0.15rem 0; }
+.linker { border: 1px dashed var(--accent); border-radius: 4px; padding: 0.8rem 1rem; margin: 0.75rem 0; background: var(--soft); }
+.linker input.code { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; margin: 0.5rem 0; }
+.steps { padding-left: 1.2rem; margin: 0.5rem 0; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.link { background: none; border: 0; padding: 0; color: var(--muted); font: inherit; cursor: pointer; text-decoration: underline; }

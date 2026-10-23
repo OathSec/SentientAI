@@ -16,6 +16,7 @@ from sentientai.memory.vector import (
 from sentientai.memory.working import build_working_memory
 from sentientai.models.embeddings import Embedder, build_embedder
 from sentientai.storage.database import Database
+from sentientai.workers.hub import WorkerHub
 
 
 def build_vector_store(settings: Settings, db: Database, dimensions: int) -> VectorStore:
@@ -40,8 +41,9 @@ def build_memory(
     metrics: Metrics | None = None,
     embedder: Embedder | None = None,
     clock: Clock | None = None,
+    hub: WorkerHub | None = None,
 ) -> MemorySystem:
-    embedder = embedder or build_embedder(settings.models.embedding)
+    embedder = embedder or build_embedder(settings.models.embedding, hub)
     return MemorySystem(
         db,
         build_vector_store(settings, db, embedder.dimensions),

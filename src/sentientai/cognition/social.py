@@ -157,7 +157,11 @@ class Relationships:
         )
         response = await self.router.chat(
             ChatRequest(
-                messages=[Message.user(prompt)], temperature=0.5, json_mode=True, max_tokens=2500
+                messages=[Message.user(prompt)],
+                temperature=0.5,
+                json_mode=True,
+                max_tokens=2500,
+                snippet=True,
             ),
             kind=TaskKind.REFLECT,
         )

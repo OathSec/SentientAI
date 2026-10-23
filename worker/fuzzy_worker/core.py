@@ -32,6 +32,7 @@ import httpx
 VERSION = "1.0.0"
 PROTOCOL = 1
 MAX_JOB_BYTES = 4_000_000
+POLL_SECONDS = 8
 
 IMAGE_BACKENDS = ("none", "automatic1111", "openai")
 
@@ -50,6 +51,14 @@ class Config:
     pause_above_gpu_percent: int = 40  # stop taking work if the GPU is already this busy
     connect_on_start: bool = False
     start_with_windows: bool = False
+    # Lend the processor too: Fuzzy sends batches of text to turn into search vectors (reading
+    # documents people taught it). Only ever for the operator's own computers.
+    use_cpu: bool = False
+    cpu_percent: int = 50  # how much of the processor Fuzzy may use for it
+    embed_model: str = ""
+    llm_base: str = ""  # the model it runs, e.g. qwen3:14b: the server compares it with its own
+    linked_name: str = ""  # what the server called this computer when it was linked
+    linked_trust: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
     def capabilities(self) -> list[str]:
@@ -58,6 +67,8 @@ class Config:
             caps.append("llm")
         if self.image_backend != "none":
             caps.append("image")
+        if self.use_cpu and self.embed_model:
+            caps.append("embed")
         return caps
 
 
@@ -139,6 +150,38 @@ def gpu_info() -> dict[str, Any]:
         return {}
 
 
+def check_link(
+    server_url: str, token: str, *, transport: httpx.BaseTransport | None = None
+) -> dict[str, Any]:
+    """Ask the server whether this address and token are real. Raises JobError with a plain
+    reason if not; otherwise the computer's name and kind as the server knows them."""
+
+    if not server_ok(server_url):
+        raise JobError("The address in the code must start with https://")
+    try:
+        with httpx.Client(
+            base_url=server_url.rstrip("/"),
+            headers={"Authorization": f"Bearer {token}", "User-Agent": f"FuzzyWorker/{VERSION}"},
+            timeout=20.0,
+            transport=transport,
+        ) as client:
+            response = client.post("/worker/hello")
+    except httpx.HTTPError as exc:
+        raise JobError(
+            f"Couldn't reach Fuzzy ({type(exc).__name__}). Check your internet."
+        ) from exc
+    if response.status_code == 401:
+        raise JobError(
+            "Fuzzy didn't recognise this code. It may have been unlinked; make a new one."
+        )
+    if response.status_code != 200:
+        raise JobError(f"Fuzzy answered with an error ({response.status_code}). Try again soon.")
+    data = response.json()
+    if not isinstance(data, dict) or not data.get("linked"):
+        raise JobError("That didn't look like a Fuzzy server.")
+    return data
+
+
 # ------------------------------------------------------------------------- jobs
 class JobError(Exception):
     pass
@@ -184,6 +227,36 @@ _LLM_FIELDS = {
     "response_format",
     "chat_template_kwargs",
 }
+
+
+def run_embed_job(config: Config, payload: dict[str, Any], client: httpx.Client) -> dict[str, Any]:
+    """Turn a batch of texts into vectors with the local embedding model."""
+
+    if not (config.use_cpu and config.embed_model):
+        raise JobError("this computer isn't set up to share its processor")
+    if not is_local(config.llm_url):
+        raise JobError("the model server must be on this computer")
+    texts = payload.get("input")
+    if not isinstance(texts, list) or not texts or len(texts) > 64:
+        raise JobError("that isn't a batch of texts I can do")
+    texts = [str(t)[:8000] or " " for t in texts]
+    try:
+        response = client.post(
+            config.llm_url.rstrip("/") + "/embeddings",
+            json={"model": config.embed_model, "input": texts},
+        )
+    except httpx.HTTPError as exc:
+        raise JobError(f"your local model server didn't answer ({type(exc).__name__})") from exc
+    if response.status_code >= 400:
+        raise JobError(f"your local model server said {response.status_code}")
+    try:
+        items = sorted(response.json()["data"], key=lambda d: d["index"])
+        vectors = [[float(x) for x in item["embedding"]] for item in items]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise JobError("your local model server returned no vectors") from exc
+    if len(vectors) != len(texts):
+        raise JobError("your local model server returned the wrong number of vectors")
+    return {"embeddings": vectors}
 
 
 def _clamp(value: Any, low: int, high: int, default: int) -> int:
@@ -279,9 +352,12 @@ class Worker:
         self._thread = threading.Thread(target=self._run, name="fuzzy-worker", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, *, wait: bool = True) -> None:
+        """Ask it to stop. The window passes ``wait=False``: it never freezes, and polls
+        ``running`` to see when the worker has really finished (after its current job)."""
+
         self._stop.set()
-        if self._thread is not None:
+        if wait and self._thread is not None:
             self._thread.join(timeout=60)
 
     @property
@@ -296,6 +372,8 @@ class Worker:
             return "The server address must start with https://"
         if not c.token.startswith("fzw_"):
             return "Paste the token you were given (it starts with fzw_)."
+        if c.use_cpu and not c.embed_model:
+            return "Processor sharing needs setting up first: press Set everything up."
         if not c.capabilities():
             return "Turn on at least one thing to share (chat model or pictures)."
         for what, on, url in (
@@ -322,7 +400,10 @@ class Worker:
         return None
 
     def _info(self) -> dict[str, Any]:
-        return {"version": VERSION, "os": sys.platform, **gpu_info()}
+        info: dict[str, Any] = {"version": VERSION, "os": sys.platform, **gpu_info()}
+        if self.config.run_llm and self.config.llm_base:
+            info["base_model"] = self.config.llm_base
+        return info
 
     def _run(self) -> None:
         c = self.config
@@ -330,7 +411,7 @@ class Worker:
         server = httpx.Client(
             base_url=c.server_url.rstrip("/"),
             headers=headers,
-            timeout=httpx.Timeout(60.0, read=45.0),
+            timeout=httpx.Timeout(60.0, read=POLL_SECONDS + 20.0),
             transport=self._transport,
         )
         local = httpx.Client(
@@ -356,6 +437,7 @@ class Worker:
                             "capabilities": c.capabilities(),
                             "info": self._info(),
                             "protocol": PROTOCOL,
+                            "wait": POLL_SECONDS,  # short, so Stop takes effect within seconds
                         },
                     )
                 except httpx.HTTPError as exc:
@@ -409,6 +491,8 @@ class Worker:
                 data = run_llm_job(self.config, payload, local)
             elif kind == "image":
                 data = run_image_job(self.config, payload, local)
+            elif kind == "embed":
+                data = run_embed_job(self.config, payload, local)
             else:
                 raise JobError(f"this program doesn't do {kind!r} jobs")
             ok = True

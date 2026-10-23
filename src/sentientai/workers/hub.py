@@ -5,6 +5,7 @@ HTTPS, so no ports to open) and runs fixed kinds of jobs against models on its o
 
 * ``llm``:   one OpenAI-style chat completion
 * ``image``: one picture
+* ``embed``: turn a batch of texts into search vectors (the one job a plain CPU does well)
 
 If no suitable worker is free the caller falls back to this machine's own models, so a worker
 going to sleep never breaks anything. Workers do one job at a time; a busy worker simply isn't
@@ -25,7 +26,9 @@ from sentientai.workers.registry import WorkerRecord
 
 log = get_logger(__name__)
 
-KINDS = ("llm", "image")
+KINDS = ("llm", "image", "embed")
+# What may only ever run on the operator's own computers: it can contain private conversations.
+PRIVATE_KINDS = ("llm", "embed")
 POLL_WAIT_S = 25.0
 GONE_AFTER_S = 75.0  # an idle worker that hasn't polled for this long is offline
 
@@ -50,6 +53,8 @@ class _Online:
     queue: asyncio.Queue[Job] = field(default_factory=asyncio.Queue)
     job_id: str | None = None  # the job it is working on (or has been given)
     jobs_done: int = 0
+    connected_at: float = 0.0
+    session_busy_s: float = 0.0
 
 
 class WorkerHub:
@@ -57,6 +62,10 @@ class WorkerHub:
         self._now = clock
         self._online: dict[str, _Online] = {}
         self._waiting: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._started: dict[str, tuple[float, str]] = {}  # job id -> (when handed out, kind)
+        # Called with (worker, kind, seconds, ok) when a job ends; set by the container to keep
+        # each computer's lifetime totals.
+        self.on_done: Callable[[WorkerRecord, str, float, bool], None] | None = None
 
     # ------------------------------------------------------------ worker side
     async def poll(
@@ -72,7 +81,7 @@ class WorkerHub:
         worker = self._online.get(record.id)
         if worker is None:
             worker = self._online[record.id] = _Online(
-                record, capabilities, info, last_seen=self._now()
+                record, capabilities, info, last_seen=self._now(), connected_at=self._now()
             )
             log.info(
                 "worker connected", extra={"worker": record.name, "caps": sorted(capabilities)}
@@ -87,16 +96,22 @@ class WorkerHub:
             worker.last_seen = self._now()
             return None
         worker.job_id = job.id
+        self._started[job.id] = (self._now(), job.kind)
         return job
 
     def result(self, record: WorkerRecord, job_id: str, *, ok: bool, data: Any, error: str) -> bool:
         worker = self._online.get(record.id)
         future = self._waiting.pop(job_id, None)
+        started, kind = self._started.pop(job_id, (self._now(), ""))
+        took = max(0.0, self._now() - started)
         if worker is not None:
             worker.last_seen = self._now()
             if worker.job_id == job_id:
                 worker.job_id = None
                 worker.jobs_done += 1
+                worker.session_busy_s += took
+        if self.on_done is not None and kind:
+            self.on_done(record, kind, took, ok)
         if future is None or future.done():
             return False  # too late: the caller already gave up on it
         if ok and isinstance(data, dict):
@@ -114,21 +129,25 @@ class WorkerHub:
             future.set_exception(WorkerError("the worker left"))
 
     # ------------------------------------------------------------ server side
-    def _eligible(self, kind: str, *, private_only: bool) -> list[_Online]:
+    def _eligible(
+        self, kind: str, *, private_only: bool, model: str | None = None
+    ) -> list[_Online]:
         now = self._now()
         found = []
         for worker in self._online.values():
             if kind not in worker.capabilities or worker.job_id is not None:
                 continue
+            if model is not None and worker.info.get("base_model") != model:
+                continue  # a different model could make a conversation worse
             if now - worker.last_seen > GONE_AFTER_S:
                 continue
-            if (kind == "llm" or private_only) and worker.record.trust != "private":
+            if (kind in PRIVATE_KINDS or private_only) and worker.record.trust != "private":
                 continue  # private conversations and thoughts never leave the operator's PCs
             found.append(worker)
         return found
 
-    def available(self, kind: str, *, private_only: bool = True) -> bool:
-        return bool(self._eligible(kind, private_only=private_only))
+    def available(self, kind: str, *, private_only: bool = True, model: str | None = None) -> bool:
+        return bool(self._eligible(kind, private_only=private_only, model=model))
 
     async def run(
         self,
@@ -137,12 +156,14 @@ class WorkerHub:
         *,
         private_only: bool = True,
         timeout: float = 600.0,
+        model: str | None = None,
     ) -> dict[str, Any]:
-        """Do a job on a free worker. ``private_only``: only the operator's own machines."""
+        """Do a job on a free worker. ``private_only``: only the operator's own machines;
+        ``model``: only computers running exactly this model."""
 
         if kind not in KINDS:
             raise ValueError(f"unknown job kind {kind!r}")
-        candidates = self._eligible(kind, private_only=private_only)
+        candidates = self._eligible(kind, private_only=private_only, model=model)
         if not candidates:
             raise WorkerError("no worker is free")
         worker = min(candidates, key=lambda w: w.jobs_done)  # spread the work around
@@ -168,9 +189,12 @@ class WorkerHub:
                 "name": w.record.name,
                 "trust": w.record.trust,
                 "capabilities": sorted(w.capabilities),
+                "owner_id": w.record.owner_id,
                 "busy": w.job_id is not None,
                 "idle_s": round(now - w.last_seen),
+                "connected_s": round(now - w.connected_at),
                 "jobs_done": w.jobs_done,
+                "session_busy_s": round(w.session_busy_s),
                 "info": w.info,
             }
             for w in self._online.values()

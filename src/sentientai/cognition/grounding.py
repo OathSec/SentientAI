@@ -112,6 +112,7 @@ class Grounding:
                     temperature=0.0,
                     json_mode=True,
                     max_tokens=2000,
+                    snippet=True,
                 ),
                 # A person is waiting on this check, so it runs on the conversation's (heavy) tier,
                 # not the one doing Fuzzy's background thinking.
@@ -166,6 +167,7 @@ class Grounding:
                             )
                         ],
                         temperature=0.3,
+                        snippet=True,
                     ),
                     kind=TaskKind.CHAT,
                 )

@@ -238,3 +238,87 @@ def test_setup_stops_with_a_plain_message_when_something_fails(
             lambda t, f: None,
             client=httpx.Client(transport=httpx.MockTransport(broken)),
         )
+
+
+# ------------------------------------------------------------- CPU sharing and linking
+def test_the_processor_job_makes_vectors_and_refuses_junk() -> None:
+    from fuzzy_worker.core import run_embed_job
+
+    seen: list[dict[str, Any]] = []
+
+    def local(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        body = json.loads(request.content)
+        data = [{"index": i, "embedding": [0.1, 0.2, 0.3]} for i in range(len(body["input"]))]
+        return httpx.Response(200, json={"data": list(reversed(data))})
+
+    client = httpx.Client(transport=httpx.MockTransport(local))
+    config = Config(use_cpu=True, embed_model="fuzzy-embed")
+    out = run_embed_job(config, {"input": ["a", "b", "c"]}, client)
+    assert len(out["embeddings"]) == 3 and seen[0]["model"] == "fuzzy-embed"
+    assert config.capabilities() == ["embed"]
+    for bad in ({"input": []}, {"input": ["x"] * 65}, {"input": "text"}):
+        with pytest.raises(JobError):
+            run_embed_job(config, bad, client)
+    with pytest.raises(JobError, match="processor"):
+        run_embed_job(Config(), {"input": ["a"]}, client)  # never set up
+
+
+def test_a_link_is_checked_with_the_server_and_failures_are_explained() -> None:
+    from fuzzy_worker.core import check_link
+
+    def ok(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/worker/hello"
+        return httpx.Response(200, json={"linked": True, "name": "Alex's PC", "trust": "shared"})
+
+    data = check_link("https://fuzzy.example", "fzw_x", transport=httpx.MockTransport(ok))
+    assert data["name"] == "Alex's PC"
+    rejected = httpx.MockTransport(lambda r: httpx.Response(401))
+    with pytest.raises(JobError, match="didn't recognise"):
+        check_link("https://fuzzy.example", "fzw_x", transport=rejected)
+    with pytest.raises(JobError, match="https://"):
+        check_link("http://fuzzy.example", "fzw_x")
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline")
+
+    with pytest.raises(JobError, match="internet"):
+        check_link("https://fuzzy.example", "fzw_x", transport=httpx.MockTransport(down))
+
+
+def test_stopping_does_not_block_the_window() -> None:
+    import time
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        time.sleep(0.5)
+        return httpx.Response(200, json={"job": None})
+
+    worker = Worker(
+        Config(
+            server_url="http://localhost:1",
+            token="fzw_x",
+            run_llm=True,
+            only_when_idle_minutes=0,
+            pause_above_gpu_percent=0,
+        ),
+        transport=httpx.MockTransport(slow),
+    )
+    worker.start()
+    time.sleep(0.2)
+    started = time.monotonic()
+    worker.stop(wait=False)
+    assert time.monotonic() - started < 0.1  # it returned at once
+    assert worker._thread is not None
+    worker._thread.join(10)
+    assert not worker.running  # and it really did stop, by itself
+
+
+def test_the_setup_for_the_processor_is_limited_to_its_share(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fuzzy_worker import setup
+
+    monkeypatch.setattr(setup.os, "cpu_count", lambda: 12)
+    assert setup.thread_count(50) == 6 and setup.thread_count(5) == 1
+    assert setup.thread_count(100) == 12 and setup.thread_count(500) == 12
+    assert "num_thread" not in setup.recommend(8151)[1]

@@ -23,6 +23,7 @@ import numpy as np
 
 from sentientai.config import EmbeddingConfig
 from sentientai.errors import ConfigError, ModelError, ModelUnavailableError
+from sentientai.workers.hub import WorkerError, WorkerHub
 
 _WORD = re.compile(r"[a-z0-9_]+(?:['.\-][a-z0-9_]+)*")
 _STOP = frozenset(
@@ -118,6 +119,40 @@ class OpenAIEmbedder:
             await self._http.aclose()
 
 
+class WorkerFirstEmbedder(OpenAIEmbedder):
+    """Big batches (reading documents) go to a free computer of the operator's, which has
+    offered its processor; everything else, and any failure, uses the server's own embedder.
+
+    Small batches (a search while someone is waiting) stay local: a round trip would be slower.
+    """
+
+    BULK = 8
+
+    def __init__(self, config: EmbeddingConfig, *, hub: WorkerHub) -> None:
+        super().__init__(config)
+        self.hub = hub
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        if len(texts) >= self.BULK and self.hub.available("embed"):
+            try:
+                data = await self.hub.run(
+                    "embed", {"input": texts, "model": self.config.model}, timeout=300
+                )
+                vectors = data.get("embeddings")
+                if (
+                    isinstance(vectors, list)
+                    and len(vectors) == len(texts)
+                    and all(isinstance(v, list) and len(v) == self.dimensions for v in vectors)
+                ):
+                    return [
+                        [float(x) for x in normalize(np.asarray(v, dtype=np.float32))]
+                        for v in vectors
+                    ]
+            except (WorkerError, ValueError, TypeError):
+                pass  # the server's own embedder does it
+        return await super().embed(texts)
+
+
 class CachedEmbedder:
     """LRU cache in front of an embedder (queries repeat a lot during recall)."""
 
@@ -160,10 +195,12 @@ def cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb) if na and nb else 0.0
 
 
-def build_embedder(config: EmbeddingConfig) -> Embedder:
-    inner: Embedder = (
-        OpenAIEmbedder(config)
-        if config.provider == "openai"
-        else HashingEmbedder(config.dimensions)
-    )
+def build_embedder(config: EmbeddingConfig, hub: WorkerHub | None = None) -> Embedder:
+    inner: Embedder
+    if config.provider != "openai":
+        inner = HashingEmbedder(config.dimensions)
+    elif hub is not None:
+        inner = WorkerFirstEmbedder(config, hub=hub)
+    else:
+        inner = OpenAIEmbedder(config)
     return CachedEmbedder(inner)

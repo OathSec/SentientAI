@@ -35,6 +35,7 @@ from sentientai.storage.records import (
     TaskSource,
     TaskStatus,
 )
+from sentientai.web.compute import build_compute_router
 from sentientai.web.pages import mount_pages
 from sentientai.web.routes import build_router
 from sentientai.web.security import BodyLimit, SecurityHeaders, WebAuth
@@ -412,6 +413,7 @@ def create_app(runtime: Runtime) -> FastAPI:
         }
 
     # ------------------------------------------------------------- web app
+    app.include_router(build_compute_router(runtime, web_auth))
     app.include_router(build_router(runtime, web_auth))
     mount_pages(app)
 

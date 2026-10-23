@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -57,7 +58,7 @@ from sentientai.tools.self_tools import self_tools
 from sentientai.tools.web import WebClient, web_tools
 from sentientai.tools.world_tools import media_tools, world_tools
 from sentientai.workers.hub import WorkerHub
-from sentientai.workers.registry import WorkerRegistry
+from sentientai.workers.registry import WorkerRecord, WorkerRegistry
 from sentientai.world.service import World
 
 log = get_logger(__name__)
@@ -154,9 +155,21 @@ async def build_components(
     policy = PolicyEngine(settings.safety)
     worker_hub = WorkerHub()
     worker_registry = WorkerRegistry(db.state, clock=clock)
+    pending_stats: set[asyncio.Task[None]] = set()
+
+    def keep_totals(record: WorkerRecord, kind: str, seconds: float, ok: bool) -> None:
+        task = asyncio.get_running_loop().create_task(
+            worker_registry.record_job(record.id, kind, seconds, ok=ok)
+        )
+        pending_stats.add(task)
+        task.add_done_callback(pending_stats.discard)
+
+    worker_hub.on_done = keep_totals
     router = build_router(settings, metrics=metrics, clients=clients, clock=clock, hub=worker_hub)
 
-    memory = build_memory(settings, db, bus=bus, metrics=metrics, embedder=embedder, clock=clock)
+    memory = build_memory(
+        settings, db, bus=bus, metrics=metrics, embedder=embedder, clock=clock, hub=worker_hub
+    )
     await memory.open()
     consolidator = MemoryConsolidator(memory, router, settings.memory)
 

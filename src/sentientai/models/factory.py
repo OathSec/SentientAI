@@ -14,7 +14,12 @@ from sentientai.workers.client import WorkerFirstClient
 from sentientai.workers.hub import WorkerHub
 
 
-def build_client(name: str, config: ModelEndpointConfig, hub: WorkerHub | None = None) -> LLMClient:
+def build_client(
+    name: str,
+    config: ModelEndpointConfig,
+    hub: WorkerHub | None = None,
+    chat_model: str = "",
+) -> LLMClient:
     if config.provider == "scripted":
         return ScriptedLLM(
             name=name,
@@ -22,7 +27,7 @@ def build_client(name: str, config: ModelEndpointConfig, hub: WorkerHub | None =
             default="(scripted model has no reply configured)",
         )
     if hub is not None:
-        return WorkerFirstClient(name, config, hub=hub)
+        return WorkerFirstClient(name, config, hub=hub, chat_model=chat_model)
     return OpenAICompatibleClient(name, config)
 
 
@@ -36,10 +41,11 @@ def build_router(
 ) -> ModelRouter:
     if clients is None:
         fast_cfg, heavy_cfg = settings.models.fast, settings.models.heavy
-        fast = build_client("fast", fast_cfg, hub)
+        chat_model = settings.workers.chat_model
+        fast = build_client("fast", fast_cfg, hub, chat_model)
         # One server can back both tiers (e.g. a single GPU box); share the client.
         same = (fast_cfg.base_url, fast_cfg.model) == (heavy_cfg.base_url, heavy_cfg.model)
-        heavy = fast if same else build_client("heavy", heavy_cfg, hub)
+        heavy = fast if same else build_client("heavy", heavy_cfg, hub, chat_model)
         clients = {ModelTier.FAST: fast, ModelTier.HEAVY: heavy}
     limiter = TokenBucket(settings.limits.llm_requests_per_minute, clock=clock)
     return ModelRouter(

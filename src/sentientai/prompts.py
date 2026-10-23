@@ -179,6 +179,10 @@ What you notice about yourself (measured, not guessed):
 What has happened since you last checked in with yourself:
 {events}
 
+Thoughts your quiet background mind came up with while you were busy (offered, not decided: take
+up whatever is worth it, ignore the rest):
+{patches}
+
 Things you said you'd do later (whether and when is up to you):
 {intentions}
 
@@ -392,6 +396,19 @@ Problems:
 </reply>
 
 Write the corrected reply between <reply> and </reply> and nothing else."""
+
+PONDER = """\
+You are the quiet background mind of {name}, thinking while {name} is busy or resting. You are not
+talking to anyone and nothing you write is shown to anyone: it is handed to {name}, who decides
+what to do with it. Here are some of {name}'s memories and recent thoughts:
+
+{memories}
+
+Let your mind move between them. Write {count} short, different thoughts, connections between
+things, or questions worth following up, each one or two sentences, in the first person as
+{name}. Don't repeat the memories; say something new. Don't mention any person by name.
+
+Return ONLY JSON: {{"thoughts": ["...", "..."]}}"""
 
 OWN_ACTIVITY = """\
 You are {name}. In your own time, you decided to do this, in your own words:

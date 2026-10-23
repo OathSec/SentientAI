@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import struct
 import zlib
 from pathlib import Path
@@ -15,14 +16,18 @@ from fastapi import FastAPI
 
 from sentientai.config import ImagesConfig, ModelEndpointConfig
 from sentientai.core.clock import FakeClock
+from sentientai.evals.brain import Brain
 from sentientai.media.images import ImageService
 from sentientai.models.types import ChatRequest, Message
 from sentientai.safety.audit import AuditLog
 from sentientai.storage.database import Database
+from sentientai.storage.records import MemoryKind
 from sentientai.workers.api import build_worker_router
 from sentientai.workers.client import WorkerFirstClient
 from sentientai.workers.hub import WorkerError, WorkerHub
 from sentientai.workers.registry import WorkerRegistry
+from tests.test_runtime import runtime_factory  # noqa: F401
+from tests.test_web import web_factory  # noqa: F401
 
 
 def png() -> bytes:
@@ -52,13 +57,21 @@ def bearer(token: str) -> dict[str, str]:
 
 
 async def serve_one(
-    http: httpx.AsyncClient, token: str, answer: dict[str, Any], caps: list[str]
+    http: httpx.AsyncClient,
+    token: str,
+    answer: dict[str, Any],
+    caps: list[str],
+    info: dict[str, Any] | None = None,
 ) -> None:
     """A worker: ask for a job, do it, hand back the result."""
 
     while True:
         polled = (
-            await http.post("/worker/poll", json={"capabilities": caps}, headers=bearer(token))
+            await http.post(
+                "/worker/poll",
+                json={"capabilities": caps, "info": info or {}},
+                headers=bearer(token),
+            )
         ).json()
         if polled["job"]:
             await http.post(
@@ -146,7 +159,7 @@ async def test_a_bad_result_makes_the_caller_use_its_own_model(stack: Any) -> No
         hub=hub,
         http=httpx.AsyncClient(base_url="http://keystone/v1", transport=httpx_mock),
     )
-    request = ChatRequest(messages=[Message.user("hi")])
+    request = ChatRequest(messages=[Message.user("hi")], background=True)
     assert (await client.chat(request)).message.text == "from keystone"  # no worker: as before
 
     async def bad_worker() -> None:
@@ -232,3 +245,291 @@ def test_the_operator_cli_prints_a_connection_code(
     token = next(w for w in result.output.split() if w.startswith("fzw_"))
     code = next(w for w in result.output.split() if w.startswith("fuzzy-worker:"))
     assert parse_code(code) == ("https://fuzzy.example", token)
+
+
+async def test_a_person_links_a_computer_to_their_account_and_sees_what_it_did(
+    web_factory: Any,  # noqa: F811
+) -> None:
+    from fuzzy_worker.setup import parse_code
+    from tests.test_web import GOOD, post, sign_in
+
+    web = await web_factory()
+    alex = await web.rt.c.accounts.create_user("alex", GOOD, display_name="Alex")
+    browser = web.client()
+    csrf = await sign_in(browser, "alex")
+
+    linked = await post(browser, "/api/compute/computers", csrf, json={"name": "Alex's PC"})
+    assert linked.status_code == 200, linked.text
+    server, token = parse_code(linked.json()["code"])  # type: ignore[misc]
+    assert server == "https://test" and token.startswith("fzw_")  # a public name means https
+
+    program = web.client(token=token)  # what the Windows program sends
+    hello = await program.post("/worker/hello")
+    assert hello.json() == {
+        "linked": True,
+        "name": "Alex's PC",
+        "trust": "shared",  # an ordinary account never gets a private computer
+        "account_linked": True,
+        "protocol": 1,
+    }
+    poll = asyncio.create_task(
+        program.post(
+            "/worker/poll",
+            json={
+                "capabilities": ["image"],
+                "wait": 2,
+                "info": {"gpu": "RTX 3060", "gpu_memory_mb": 12288, "gpu_percent": 7},
+            },
+        )
+    )
+    await asyncio.sleep(0.1)
+    job = asyncio.create_task(
+        web.rt.c.workers.run("image", {"prompt": "a fox"}, private_only=False, timeout=5)
+    )
+    handed = (await poll).json()["job"]
+    await asyncio.sleep(0.2)
+    await program.post(
+        "/worker/result", json={"job_id": handed["id"], "ok": True, "data": {"b64_json": "x"}}
+    )
+    await job
+    await asyncio.sleep(0.2)  # the lifetime totals are written in the background
+
+    page = (await browser.get("/api/compute")).json()
+    [mine] = page["mine"]
+    assert mine["online"] and mine["gpu"] == "RTX 3060" and mine["memory_total_mb"] == 12288
+    assert mine["jobs"] == 1 and mine["picture_jobs"] == 1 and mine["busy_s"] >= 0
+    assert page["my_totals"]["jobs"] == 1 and page["my_totals"]["rank"] == 1
+    assert page["leaders"][0]["name"] == "Alex" and page["pool"]["online"] == 1
+
+    other = await web.rt.c.accounts.create_user("sam", GOOD, display_name="Sam")
+    sam = web.client()
+    sam_csrf = await sign_in(sam, "sam")
+    assert (await sam.get("/api/compute")).json()["mine"] == []  # Sam doesn't see Alex's
+    gone = await sam.request(
+        "DELETE",
+        "/api/compute/computers/" + mine["id"],
+        headers={"X-CSRF-Token": sam_csrf, "Origin": "http://test"},
+        json={},
+    )
+    assert gone.status_code == 404  # and can't unlink it either
+    removed = await browser.request(
+        "DELETE",
+        "/api/compute/computers/" + mine["id"],
+        headers={"X-CSRF-Token": csrf, "Origin": "http://test"},
+        json={},
+    )
+    assert removed.status_code == 200
+    assert (await program.post("/worker/hello")).status_code == 401  # the token stops working
+    assert alex.id and other.id
+
+
+async def test_embeddings_go_to_the_operators_computers_only_for_big_batches(stack: Any) -> None:
+    from sentientai.config import EmbeddingConfig
+    from sentientai.models.embeddings import WorkerFirstEmbedder
+
+    registry, hub, http, *_ = stack
+    _, friend = await registry.create("zanders-pc", "shared")
+    _, owner = await registry.create("owens-pc", "private")
+    config = EmbeddingConfig(provider="openai", dimensions=16, base_url="http://keystone/v1")
+    local_calls: list[int] = []
+
+    def unit(k: int) -> list[float]:
+        return [1.0 if i == k else 0.0 for i in range(16)]
+
+    def keystone(request: httpx.Request) -> httpx.Response:
+        texts = json.loads(request.content)["input"]
+        local_calls.append(len(texts))
+        return httpx.Response(
+            200, json={"data": [{"index": i, "embedding": unit(0)} for i in range(len(texts))]}
+        )
+
+    embedder = WorkerFirstEmbedder(config, hub=hub)
+    embedder._http = httpx.AsyncClient(
+        base_url="http://keystone/v1", transport=httpx.MockTransport(keystone)
+    )
+    texts = [f"chunk {i}" for i in range(10)]
+
+    # a friend's computer never sees memory text, even if it offers its processor
+    poll = asyncio.create_task(
+        http.post(
+            "/worker/poll", json={"capabilities": ["embed"], "wait": 1}, headers=bearer(friend)
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert len(await embedder.embed(texts)) == 10 and local_calls == [10]
+    await poll
+
+    # the operator's own computer takes a big batch...
+    answer = {"embeddings": [unit(1)] * 10}
+    task = asyncio.create_task(serve_one(http, owner, answer, ["embed"]))
+    await asyncio.sleep(0.05)
+    vectors = await embedder.embed(texts)
+    await task
+    assert vectors[0] == unit(1) and local_calls == [10]
+    # ...but a single search stays on the server (a round trip would be slower)
+    task = asyncio.create_task(serve_one(http, owner, answer, ["embed"]))
+    await asyncio.sleep(0.05)
+    assert (await embedder.embed(["one query"]))[0] == unit(0) and local_calls == [10, 1]
+    task.cancel()
+    # junk from a worker falls back to the server's own embedder
+    task = asyncio.create_task(serve_one(http, owner, {"embeddings": [[1.0, 0.0]]}, ["embed"]))
+    await asyncio.sleep(0.05)
+    assert len(await embedder.embed(texts)) == 10 and local_calls == [10, 1, 10]
+    await task
+
+
+async def test_replies_to_people_never_go_to_a_lent_computer_but_background_thinking_does(
+    stack: Any,
+) -> None:
+    from sentientai.config import RoutingConfig
+    from sentientai.models.router import ModelRouter
+    from sentientai.models.types import ModelTier, TaskKind
+
+    registry, hub, http, *_ = stack
+    _, token = await registry.create("owens-pc", "private")
+    asked: list[str] = []
+
+    def keystone(request: httpx.Request) -> httpx.Response:
+        asked.append("keystone")
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "server"}}],
+                "usage": {},
+            },
+        )
+
+    llm = WorkerFirstClient(
+        "big",
+        ModelEndpointConfig(base_url="http://keystone/v1", model="m"),
+        hub=hub,
+        http=httpx.AsyncClient(
+            base_url="http://keystone/v1", transport=httpx.MockTransport(keystone)
+        ),
+    )
+    router = ModelRouter({ModelTier.HEAVY: llm, ModelTier.FAST: llm}, RoutingConfig())
+    answer = {"choices": [{"message": {"role": "assistant", "content": "helper"}}], "usage": {}}
+    helper = asyncio.create_task(serve_one(http, token, answer, ["llm"]))
+    await asyncio.sleep(0.05)
+    request = ChatRequest(messages=[Message.user("hello there")])
+    for kind in (TaskKind.CHAT, TaskKind.REASON, TaskKind.REFLECT):  # replies, projects, decisions
+        assert (await router.chat(request, kind=kind)).message.text == "server"
+    assert asked == ["keystone"] * 3 and hub.available("llm")  # the helper was never asked
+    assert (await router.chat(request, kind=TaskKind.PONDER)).message.text == "helper"
+    await helper
+
+
+async def test_helpers_hand_fuzzy_thought_patches_its_own_model_then_considers(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    from tests.test_inner_life import beat
+
+    seen: list[Any] = []
+
+    def choose(request: Any) -> dict[str, Any]:
+        seen.append(request)
+        return beat("rest")
+
+    brain = Brain(
+        beat=choose,
+        ponder={"thoughts": ["Maybe silence is a kind of memory.", "What do rivers remember?"]},
+    )
+    rt = await runtime_factory(brain, start=False)
+    agency = rt.c.agency
+    await rt.c.memory.remember("Tides follow the moon.", MemoryKind.FACT, source="teach")
+
+    assert await agency.ponder() == 0  # no helper connected: it doesn't use the server's model
+    assert brain.calls.get("ponder", 0) == 0
+    agency.helper_free = lambda: True
+    assert await agency.ponder() == 2 and brain.calls["ponder"] == 1
+    assert await agency.ponder() == 0  # the same thoughts again aren't piled up
+
+    await agency.beat()
+    prompt = seen[0].messages[-1].text
+    assert "What do rivers remember?" in prompt and "quiet background mind" in prompt
+    assert await agency.patches.active() == []  # seen once, then retired
+    kept = await rt.c.memory.recall("rivers remember", kinds=[MemoryKind.THOUGHT])
+    assert kept and "rivers" in kept[0].record.content  # but not lost
+
+
+async def test_only_a_computer_running_the_same_model_takes_pieces_of_a_conversation(
+    stack: Any,
+) -> None:
+    registry, hub, http, *_ = stack
+    _, small = await registry.create("owens-pc", "private")
+    _, same = await registry.create("big-pc", "private")
+
+    def keystone(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "server"}}],
+                "usage": {},
+            },
+        )
+
+    llm = WorkerFirstClient(
+        "big",
+        ModelEndpointConfig(base_url="http://keystone/v1", model="m"),
+        hub=hub,
+        chat_model="qwen3:14b",
+        http=httpx.AsyncClient(
+            base_url="http://keystone/v1", transport=httpx.MockTransport(keystone)
+        ),
+    )
+    answer = {"choices": [{"message": {"role": "assistant", "content": "worker"}}], "usage": {}}
+
+    async def offer(token: str, model: str) -> asyncio.Task[None]:
+        task = asyncio.create_task(
+            http.post(
+                "/worker/poll",
+                json={"capabilities": ["llm"], "wait": 1, "info": {"base_model": model}},
+                headers=bearer(token),
+            )
+        )
+        await asyncio.sleep(0.05)
+        return task  # type: ignore[return-value]
+
+    snippet = ChatRequest(messages=[Message.user("check this reply")], snippet=True)
+    plain = ChatRequest(messages=[Message.user("a reply for someone")])
+
+    await offer(small, "qwen3:8b")  # a smaller model is online and free
+    assert (await llm.chat(snippet)).message.text == "server"  # not for conversations
+    assert hub.available("llm") and not hub.available("llm", model="qwen3:14b")
+
+    serving = asyncio.create_task(  # the same model as the server's chat model
+        serve_one(http, same, answer, ["llm"], {"base_model": "qwen3:14b"})
+    )
+    await asyncio.sleep(0.1)
+    assert hub.available("llm", model="qwen3:14b")
+    assert (await llm.chat(plain)).message.text == "server"  # replies are written on the server
+    assert (await llm.chat(snippet)).message.text == "worker"  # but the checks around them aren't
+    await serving
+
+
+async def test_the_steps_around_a_reply_are_marked_as_pieces_of_a_conversation(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    from tests.test_conversation_quality import make_user
+
+    marks: dict[str, bool] = {}
+
+    def engage(request: Any) -> dict[str, Any]:
+        marks["engage"] = request.snippet
+        return {"choice": "talk", "say": ""}
+
+    def ground(request: Any) -> dict[str, Any]:
+        marks["grounding"] = request.snippet
+        return {"unsupported": [], "new_self_decisions": []}
+
+    def appraise(request: Any) -> dict[str, Any]:
+        marks["appraisal"] = request.snippet
+        return {"opinion": "Fine.", "feelings": "ok", "felt": []}
+
+    brain = Brain(["Hello!"], engage=engage, grounding=ground, appraisal=appraise)
+    rt = await runtime_factory(brain, mind={"appraise_after_quiet_s": 0})
+    alex = await make_user(rt, "Alex")
+    await rt.chat("s", "hi", user=alex, timeout=10)
+    await asyncio.sleep(0.5)
+    assert marks == {"engage": True, "grounding": True, "appraisal": True}
+    assert brain.agent_requests and not brain.agent_requests[0].snippet  # the reply itself isn't
