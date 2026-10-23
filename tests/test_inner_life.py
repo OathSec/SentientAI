@@ -48,6 +48,7 @@ async def test_option_order_is_shuffled_so_position_means_nothing(
     rt.c.agency._rng = random.Random(7)
     for _ in range(6):
         await rt.c.agency.beat()
+    assert all(r.min_p == 0.1 for r in seen)  # hotter sampling stays coherent
     orders = {tuple(_options(r.messages[-1].text)) for r in seen}
     assert len(orders) > 1  # small models pick the first item; now that is no one thing
     assert {frozenset(o) for o in orders} == {frozenset(next(iter(orders)))}  # same choices
@@ -242,3 +243,13 @@ async def test_it_can_decide_who_it_is_while_alone(runtime_factory: Any) -> None
     assert (await rt.c.selfhood.get("favourite place")).value == "the sea"  # type: ignore[union-attr]
     [pending] = await rt.c.selfhood.pending()
     assert pending.value == "the mountains"
+
+
+def test_min_p_is_sent_only_when_asked() -> None:
+    from sentientai.config import ModelEndpointConfig
+    from sentientai.models.openai_compat import OpenAICompatibleClient
+
+    llm = OpenAICompatibleClient("x", ModelEndpointConfig(base_url="http://x/v1", model="m"))
+    plain, _ = llm._payload(ChatRequest(messages=[Message.user("hi")]))
+    hot, _ = llm._payload(ChatRequest(messages=[Message.user("hi")], min_p=0.1))
+    assert "min_p" not in plain and hot["min_p"] == 0.1

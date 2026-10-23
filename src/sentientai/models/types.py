@@ -97,6 +97,9 @@ class ChatRequest(BaseModel):
     max_tokens: int | None = None
     json_mode: bool = False
     stop: list[str] | None = None
+    # Drop tokens less than this fraction as likely as the best one (llama.cpp, vLLM): keeps a
+    # hot temperature coherent. Only sent when set.
+    min_p: float | None = None
     # "required" makes the model call one of ``tools`` (native tool calling only).
     tool_choice: Literal["auto", "required", "none"] | None = None
 

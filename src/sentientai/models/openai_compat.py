@@ -121,6 +121,8 @@ class OpenAICompatibleClient:
             payload["response_format"] = {"type": "json_object"}
         if request.stop:
             payload["stop"] = request.stop
+        if request.min_p is not None:
+            payload["min_p"] = request.min_p
         payload.update(self.config.extra_body)
         return payload, native
 

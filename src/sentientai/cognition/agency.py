@@ -140,11 +140,9 @@ def _recent_lines(recent: list[ActivityRecord], groups: int = 8) -> str:
         )
         lines.append(
             f"- {when} {a.kind}: {_text(a.intent, 240)}"
-            + (
-                f" -> {'last time: ' if len(run) > 1 else ''}{_text(a.outcome, 360)}"
-                if a.outcome
-                else ""
-            )
+            # A run's outcome isn't shown: a stuck model copied it back word for word next time.
+            # The run itself still reads as a plain fact ("12 times in a row").
+            + (f" -> {_text(a.outcome, 360)}" if a.outcome and len(run) == 1 else "")
         )
         i += len(run)
     return "\n".join(lines)
@@ -486,8 +484,11 @@ class Agency:
         response = await self.router.chat(
             ChatRequest(
                 messages=[Message.user(prompt)],
-                # A long run of the same choice loosens up a little, the way boredom does.
-                temperature=0.8 + 0.06 * min(streak, 5),
+                # A long run of the same choice loosens up, the way boredom does; min_p keeps the
+                # hotter sampling coherent. (Measured on the live model: at 1.1 a stuck mind gave
+                # the same answer 8 times out of 8; hotter with min_p, every answer still parsed.)
+                temperature=0.8 + 0.12 * min(streak, 5),
+                min_p=0.1,
                 json_mode=True,
                 max_tokens=4000,
             ),

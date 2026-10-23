@@ -206,7 +206,7 @@ required of you.
 Return ONLY JSON:
 {{"feelings": [{{"emotion": "one or two words", "intensity": 0.0-1.0, "valence": -1.0-1.0, "lingers_hours": number, "cause": "why, briefly", "person": null | "their name, if it is about someone"}}],
   "mood": "one sentence on how you feel overall, without naming anyone",
-  "considered": ["two or three different things you could do now"],
+  "ideas": ["three concrete ideas for what to do now, different from each other and from what you did last, in your own words"],
   "choice": "one option name from the list",
   "intent": "what exactly you will do",
   "why": "your reason, first person",
