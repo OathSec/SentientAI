@@ -49,6 +49,7 @@ from sentientai.safety.policy import PolicyEngine
 from sentientai.storage.database import Database
 from sentientai.tools.base import Tool, ToolRegistry
 from sentientai.tools.cognitive import cognitive_tools
+from sentientai.tools.embed import ShareLink
 from sentientai.tools.executor import ToolExecutor
 from sentientai.tools.filesystem import Workspace, filesystem_tools
 from sentientai.tools.memory_tools import memory_tools
@@ -273,6 +274,7 @@ async def build_components(
         *filesystem_tools(workspace),
         *repository_tools(workspace),
         *web_tools(web),
+        ShareLink(),
         *memory_tools(memory, pipeline, workspace),
         *cognitive_tools(goals, analyzer, improvement),
         *self_tools(selfhood, db.conversations, intentions, db.users),

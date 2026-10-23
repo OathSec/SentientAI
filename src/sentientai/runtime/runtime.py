@@ -399,7 +399,11 @@ class Runtime:
                 user_id=user_id,
                 role="assistant",
                 content=answer,
-                metadata={"task_id": final.id, "media": media},
+                metadata={
+                    "task_id": final.id,
+                    "media": media,
+                    "embeds": list(final.metadata.get("embeds") or []),
+                },
             )
         )
         await c.memory.add_turn(session_id, "user", text, user_id=user_id)
@@ -737,6 +741,7 @@ class Runtime:
             "tools": [t.name for t in outcome.tools],
             "grounding": outcome.grounding,
             "media": outcome.media,
+            "embeds": outcome.embeds,
         }
         await c.db.tasks.save(record)
         c.metrics.tasks.inc(source=task.source.value, status=outcome.status.value)
@@ -776,7 +781,12 @@ class Runtime:
                 user_id=task.user_id,
                 role="assistant",
                 content=answer,
-                metadata={"task_id": task.id, "media": outcome.media, "recovered": True},
+                metadata={
+                    "task_id": task.id,
+                    "media": outcome.media,
+                    "embeds": outcome.embeds,
+                    "recovered": True,
+                },
             )
         )
         await c.memory.add_turn(

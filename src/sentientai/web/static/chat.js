@@ -17,6 +17,20 @@
   const nearBottom = () => log.scrollTop + log.clientHeight >= log.scrollHeight - 160;
   const toBottom = () => { log.scrollTop = log.scrollHeight; };
 
+  /* A video plays in the chat (YouTube/Vimeo players only); anything else is a card that opens the real site. */
+  function embedNode(e) {
+    const safe = /^https:\/\//.test(e.url || "");
+    if (e.kind === "link" || !e.player) {
+      return el("a", { class: "embed card-link", href: safe ? e.url : "#", target: "_blank", rel: "noopener noreferrer nofollow" },
+        el("strong", {}, e.title || e.host), el("span", { class: "small muted" }, e.host + (e.note ? " · " + e.note : "")), el("span", { class: "small" }, "Open ↗"));
+    }
+    return el("div", { class: "embed video" },
+      el("iframe", { src: e.player, title: e.title, loading: "lazy", allowfullscreen: true,
+        allow: "fullscreen; picture-in-picture", referrerpolicy: "strict-origin-when-cross-origin",
+        sandbox: "allow-scripts allow-same-origin allow-presentation" }),
+      el("div", { class: "small muted" }, el("a", { href: safe ? e.url : "#", target: "_blank", rel: "noopener noreferrer" }, e.title || e.host), e.note ? " · " + e.note : ""));
+  }
+
   function bubble(m, extra) {
     const mine = m.role !== "assistant";
     const body = mine ? m.content : Markdown.render(m.content);
@@ -27,6 +41,7 @@
         el("img", { src: image.url, alt: "An image from " + name, loading: "lazy" }));
       node.firstChild.append(link);
     }
+    for (const e of m.embeds || []) node.firstChild.append(embedNode(e));
     node.append(el("div", { class: "stamp" }, extra === "pending" ? "sending…" : hhmm(m.at)));
     return node;
   }

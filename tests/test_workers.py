@@ -658,3 +658,29 @@ async def test_unused_invite_codes_can_be_reviewed_and_revoked(
     assert (
         swept.json() == {"revoked": 2} and (await alex.get("/api/me/invites")).json()["left"] == 3
     )
+
+
+async def test_fuzzy_can_only_show_addresses_it_actually_found() -> None:
+    from sentientai.tools.base import ToolContext
+    from sentientai.tools.embed import ShareLink, remember_urls
+
+    tool, ctx = ShareLink(), ToolContext()
+
+    async def show(url: str) -> Any:
+        return await tool.run(tool.args_model(url=url, title="A thing", note="why"), ctx)
+
+    assert not (await show("https://www.youtube.com/watch?v=abcdefghijk")).ok  # nothing found yet
+    remember_urls(ctx, "Top result: https://www.youtube.com/watch?v=abcdefghijk (Markiplier)")
+    video = await show("https://www.youtube.com/watch?v=abcdefghijk")
+    assert video.ok and video.data["embed"]["kind"] == "youtube"
+    assert video.data["embed"]["player"] == "https://www.youtube-nocookie.com/embed/abcdefghijk"
+    remember_urls(ctx, "see https://example.org/article/")
+    card = await show("https://www.example.org/article")
+    assert card.ok and card.data["embed"]["kind"] == "link" and "player" not in card.data["embed"]
+    for bad in (
+        "http://example.org/article/",
+        "https://127.0.0.1/x",
+        "https://user:pw@example.org/a",
+    ):
+        remember_urls(ctx, bad)
+        assert not (await show(bad)).ok  # plain http, raw addresses and logins are never shown

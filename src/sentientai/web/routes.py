@@ -339,6 +339,11 @@ def build_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
             "content": m.content,
             "at": m.created_at.isoformat(),
             "media": [public_media(i) for i in m.metadata.get("media", [])],
+            "embeds": [
+                {k: e.get(k, "") for k in ("kind", "url", "title", "note", "host", "player")}
+                for e in m.metadata.get("embeds", [])
+                if isinstance(e, dict)
+            ],
         }
 
     async def reply_in_background(user: UserRecord, text: str, recorded: asyncio.Event) -> None:

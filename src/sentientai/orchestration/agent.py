@@ -14,6 +14,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from sentientai import prompts
 from sentientai.cognition.goals import GoalManager
@@ -49,6 +50,7 @@ from sentientai.safety.limits import LoopGuard
 from sentientai.storage.database import ActivityRepository, UserRepository
 from sentientai.storage.records import Scope, ScoredMemory, TaskRecord, TaskSource, TaskStatus
 from sentientai.tools.base import ToolContext, ToolRegistry
+from sentientai.tools.embed import remember_urls
 from sentientai.tools.executor import ToolExecutor
 
 log = get_logger(__name__)
@@ -212,6 +214,7 @@ class TaskOutcome:
     novelty: float = 0.0
     grounding: dict[str, object] | None = None
     media: list[str] = field(default_factory=list)
+    embeds: list[dict[str, Any]] = field(default_factory=list)  # videos and link cards shown
     transcript: list[Message] = field(default_factory=list)
 
     @property
@@ -701,6 +704,10 @@ class CognitiveAgent:
                     outcome.tools.append(ToolTrace(call.name, result.ok, result.output[:200]))
                     if result.ok and isinstance(result.data, dict) and result.data.get("media_id"):
                         outcome.media.append(str(result.data["media_id"]))
+                    if call.name in ("web_search", "web_fetch") and result.ok:
+                        remember_urls(ctx, result.output, str(call.arguments.get("url") or ""))
+                    if result.ok and isinstance(result.data, dict) and result.data.get("embed"):
+                        outcome.embeds.append(result.data["embed"])
                     if not result.ok and "denied" in result.output:
                         self.mind.affect.on_denied_action()
                     outcome.transcript.append(Message.tool(call.id, call.name, result.for_model()))

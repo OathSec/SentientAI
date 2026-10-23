@@ -632,7 +632,10 @@ class Agency:
             [MemoryKind.REFLECTION, MemoryKind.THOUGHT], limit=6, scope=Scope()
         )
         shared = await self.redactor.shared()
-        lines = distinct([shared(m.content[:600]) for m in [*seeds, *recent[:3]]])
+        earlier = [
+            p.text for p in (await self.patches.active())[:3]
+        ]  # build on what it just thought
+        lines = distinct([shared(m.content[:600]) for m in [*seeds, *recent[:3]]] + earlier)
         if not lines:
             return 0
         response = await self.router.chat(
@@ -641,14 +644,14 @@ class Agency:
                     Message.user(
                         prompts.PONDER.format(
                             name=self.name,
-                            memories="\n".join(f"- {line}" for line in lines[:6]),
-                            count=3,
+                            memories="\n".join(f"- {line}" for line in lines[:8]),
+                            count=5,
                         )
                     )
                 ],
                 temperature=0.9,
                 json_mode=True,
-                max_tokens=600,
+                max_tokens=900,
             ),
             kind=TaskKind.PONDER,
         )
@@ -659,7 +662,7 @@ class Agency:
             if isinstance(raw, list)
             else []
         )
-        made = await self.patches.add(thoughts[:4])
+        made = await self.patches.add(thoughts[:6])
         return len(made)
 
     async def _on_mind(self) -> str:

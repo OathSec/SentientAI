@@ -247,3 +247,9 @@ h3.mt-xs { font-size: 0.8rem; color: var(--muted); }
 .steps { padding-left: 1.2rem; margin: 0.5rem 0; }
 button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 button.link { background: none; border: 0; padding: 0; color: var(--muted); font: inherit; cursor: pointer; text-decoration: underline; }
+
+/* things Fuzzy shows from the web */
+.embed { margin-top: 0.6rem; max-width: 34rem; }
+.embed.video iframe { width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 4px; background: var(--soft); }
+.embed.card-link { display: grid; gap: 0.15rem; padding: 0.6rem 0.8rem; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); text-decoration: none; }
+.embed.card-link:hover { border-color: var(--accent); }

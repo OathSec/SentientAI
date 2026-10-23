@@ -13,6 +13,10 @@ OUT = HERE.parent / "site-build"
 EXE = Path(sys.argv[1]) if len(sys.argv) > 1 else None
 LINUX = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 FUZZY = "https://entertainment.systembridge.site"
+# Changes whenever the styles or script do, so a deploy reaches everyone at once.
+VERSION = hashlib.sha1(
+    b"".join((HERE / n).read_bytes() for n in ("fuzzy.css", "live.js")), usedforsecurity=False
+).hexdigest()[:10]
 
 NAV = [("/", "Home"), ("/about/", "About"), ("/worker/", "Fuzzy Worker"), ("/privacy/", "Privacy")]
 
@@ -38,7 +42,7 @@ def page(path: str, title: str, description: str, body: str) -> None:
 <meta property="og:description" content="{esc(description)}">
 <meta property="og:type" content="website">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/fuzzy.css">
+<link rel="stylesheet" href="/fuzzy.css?v={VERSION}">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -66,7 +70,7 @@ def page(path: str, title: str, description: str, body: str) -> None:
     </div>
   </div>
 </footer>
-<script src="/live.js" defer></script>
+<script src="/live.js?v={VERSION}" defer></script>
 </body>
 </html>
 """

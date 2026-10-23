@@ -33,6 +33,7 @@ CSP = "; ".join(
         "connect-src 'self'",
         "font-src 'self'",
         "manifest-src 'self'",
+        "frame-src https://www.youtube-nocookie.com https://player.vimeo.com",
         "frame-ancestors 'none'",
         "base-uri 'none'",
         "form-action 'self'",

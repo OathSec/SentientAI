@@ -352,13 +352,13 @@ class MindConfig(BaseModel):
     )
     appraise_relationships: bool = True
     ponder_every_s: float = Field(
-        default=90.0,
-        ge=10,
+        default=20.0,
+        ge=5,
         description="While a lent computer is free, how often it thinks in the background and "
         "hands Fuzzy a few thought patches (never about people; Fuzzy decides what to do "
         "with them).",
     )
-    max_patches: int = Field(default=12, ge=1, description="Thought patches held at once.")
+    max_patches: int = Field(default=30, ge=1, description="Thought patches held at once.")
     choose_to_talk: bool = Field(
         default=True,
         description="Before answering a message, Fuzzy decides whether it wants to talk now, "
@@ -516,6 +516,9 @@ class AccountsConfig(BaseModel):
             "image_generate",
             "world_look",  # it can talk about its world; changing it is Fuzzy's own choice only
             "plan_later",  # ...but it can note that it means to, and decide in its own time
+            "web_search",  # look things up, and show what it finds (share_link)
+            "web_fetch",
+            "share_link",
         ],
         description="Tools Fuzzy may use in conversations with people who are not admins.",
     )
