@@ -447,8 +447,10 @@ async def test_agency_only_offers_what_is_possible_and_ignores_the_rest(
     # No image server is configured, so art isn't something it can choose.
     activity, rest_s = await rt.c.agency.beat()
     assert activity is None and rest_s == rt.settings.mind.beat_min_s
+    # Something that isn't a suggestion is its own idea, done its own way, not refused.
     activity, _ = await rt.c.agency.beat()
-    assert activity is None
+    assert activity is not None and activity.kind == "own"
+    assert activity.intent == "fly to the moon" and "my own way" in activity.outcome
     activity, rest_s = await rt.c.agency.beat()
     assert activity is not None and activity.kind == "journal" and rest_s == 15 * 60
     options = brain.agent_requests  # beats don't go through the agent loop
@@ -742,11 +744,13 @@ async def test_a_beat_that_says_nothing_is_recorded_as_failed_not_silent(
 async def test_choosing_something_it_cannot_do_is_visible_too(
     runtime_factory: Any,  # noqa: F811
 ) -> None:
-    rt = await runtime_factory(Brain(beat=beat("teleport", "go to the moon")), start=False)
+    # A suggestion that isn't possible right now (no image server here) is said plainly.
+    rt = await runtime_factory(Brain(beat=beat("create_art", "paint the sea")), start=False)
     activity, _ = await rt.c.agency.beat()
     assert activity is None
     [recorded] = await rt.c.db.activities.recent(limit=5)
-    assert recorded.status is ActivityStatus.FAILED and "teleport" in recorded.outcome
+    assert recorded.status is ActivityStatus.FAILED
+    assert "create art, but that isn't possible right now" in recorded.outcome
 
 
 async def test_it_can_walk_where_it_wants_and_say_what_it_thinks_on_the_way(

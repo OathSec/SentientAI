@@ -12,6 +12,7 @@ from sentientai.cognition.agency import Agency
 from sentientai.cognition.emotions import Emotions
 from sentientai.cognition.goals import GoalManager
 from sentientai.cognition.grounding import Grounding
+from sentientai.cognition.intentions import Intentions
 from sentientai.cognition.interoception import Interoception
 from sentientai.cognition.mind import Mind
 from sentientai.cognition.outside import OutsideWorld
@@ -241,6 +242,7 @@ async def build_components(
     )
     user_data = UserDataService(db, memory, audit=audit)
 
+    intentions = Intentions(db.state, clock=clock)
     registry = ToolRegistry()
     tools: list[Tool[Any]] = [
         *filesystem_tools(workspace),
@@ -248,7 +250,7 @@ async def build_components(
         *web_tools(web),
         *memory_tools(memory, pipeline, workspace),
         *cognitive_tools(goals, analyzer, improvement),
-        *self_tools(selfhood, db.conversations),
+        *self_tools(selfhood, db.conversations, intentions, db.users),
         *world_tools(world),
         *media_tools(images, quotas),
     ]
@@ -300,6 +302,7 @@ async def build_components(
         audit=audit,
         bus=bus,
         clock=clock,
+        intentions=intentions,
         outside=OutsideWorld(
             enabled=settings.mind.outside_world and settings.web.search_backend != "disabled"
         ),

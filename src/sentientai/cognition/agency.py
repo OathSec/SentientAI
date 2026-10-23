@@ -27,6 +27,7 @@ from typing import Any
 from sentientai import prompts
 from sentientai.cognition.emotions import Emotions
 from sentientai.cognition.goals import GoalManager
+from sentientai.cognition.intentions import Intentions
 from sentientai.cognition.interoception import BodySignals, Interoception
 from sentientai.cognition.outside import OutsideWorld
 from sentientai.cognition.privacy import Redactor
@@ -84,6 +85,8 @@ DESCRIPTIONS = {
     "new_goal": "set yourself a new goal",
     "rest": "rest and do nothing for a while",
 }
+# Something it thought of itself, beyond the suggestions (the choice is its own words).
+OWN = "own"
 _WORLD_ACTION: dict[str, Action] = {
     "think": "thinking",
     "wander": "thinking",
@@ -97,6 +100,7 @@ _WORLD_ACTION: dict[str, Action] = {
     "write_note": "thinking",
     "reconsider": "thinking",
     "rest": "resting",
+    OWN: "thinking",
 }
 _NOTE_KINDS = [MemoryKind.CONVERSATION, MemoryKind.FACT, MemoryKind.SUMMARY]
 
@@ -233,6 +237,7 @@ class Agency:
         clock: Clock | None = None,
         outside: OutsideWorld | None = None,
         rng: random.Random | None = None,
+        intentions: Intentions | None = None,
     ) -> None:
         self.settings = settings
         self.config = settings.mind
@@ -252,6 +257,7 @@ class Agency:
         self.bus = bus
         self.clock = clock or SystemClock()
         self.outside = outside or OutsideWorld(enabled=False)
+        self.intentions = intentions or Intentions(db.state, clock=self.clock)
         self._rng = rng or random.Random()  # noqa: S311 - variety, not security
         self._happenings: deque[str] = deque(maxlen=30)
         self.beats = 0  # beats since boot (the runtime refreshes the life story every so many)
@@ -479,6 +485,7 @@ class Agency:
             feelings=self.emotions.render(feelings, everything=True),
             signals=signals.describe(),
             events="\n".join(self._happenings) or "- nothing in particular",
+            intentions=self.intentions.render(await self.intentions.active()),
             recent=_recent_lines(recent) or "- nothing yet: this is your first time to yourself",
             people="\n".join(known) or "- nobody yet",
             goals=GoalManager.render(await self.goals.active()),
@@ -512,16 +519,38 @@ class Agency:
         if mood:
             await self.emotions.set_mood((await self.redactor.shared())(mood))
         raw_choice = _text(data.get("choice"), 40).lower().replace(" ", "_")
+        # An option by name ("research", "research_the_tides"); anything else is its own idea.
         kind = next((k for k in options if k == raw_choice), None) or next(
-            (k for k in options if k in raw_choice), None
+            (k for k in options if raw_choice.startswith(k + "_")), None
         )
+        own = _text(data.get("choice"), 2000)
+        unavailable = next((k for k in DESCRIPTIONS if k == raw_choice), None)
+        if kind is None and unavailable:
+            await self._record(
+                "rest",
+                "tried to decide what to do next",
+                f"I wanted to {unavailable.replace('_', ' ')}, but that isn't possible right now, "
+                "so I rested.",
+                ActivityStatus.FAILED,
+                thinking=thinking,
+            )
+            return None
+        if kind is None and own and OWN in self.config.activities:
+            # Not one of the suggestions: something it thought of itself. That is its choice
+            # too; it gets done in its own way (see _do_own), not refused.
+            kind = OWN
+            intent = _text(data.get("intent"), 2000)
+            if intent.casefold() in own.casefold():
+                intent = own
+            elif own.casefold() not in intent.casefold():
+                intent = f"{own}: {intent}" if intent else own
+            data["intent"] = intent
         if kind is None:
             log.info("beat chose nothing available", extra={"choice": raw_choice})
             await self._record(
                 "rest",
                 "tried to decide what to do next",
-                f"I wanted to do “{_text(data.get('choice'), 200)}”, which isn't something I can "
-                f"do right now (I can: {', '.join(options)}), so I rested.",
+                "I couldn't settle on anything to do, so I rested.",
                 ActivityStatus.FAILED,
                 thinking=thinking,
             )
@@ -536,7 +565,7 @@ class Agency:
         rest_s = max(self.config.beat_min_s, min(self.config.beat_max_s, rest_s))
         return Choice(
             kind=kind,
-            intent=_text(data.get("intent"), 2000) or DESCRIPTIONS[kind],
+            intent=_text(data.get("intent"), 2000) or DESCRIPTIONS.get(kind, own),
             why=_text(data.get("why"), 4000),
             person=person,
             goal_id=_text(data.get("goal_id"), 48) or None,
@@ -712,6 +741,68 @@ class Agency:
             await self.world.set_action("thinking", thought)
         return "\n".join([thought + (f"\nInsight: {insight}" if insight else ""), *selfhood])
 
+    async def _do_own(self, choice: Choice, activity: ActivityRecord, signals: BodySignals) -> str:
+        """Something Fuzzy came up with itself. It does it in its mind; if it needs its tools
+        (the web, files, code, its world, a picture), that part becomes a project of its own."""
+
+        scope = Scope.for_user(choice.person.id) if choice.person else Scope()
+        hits = await self.memory.recall(choice.intent, k=10, scope=scope, touch=False)
+        rel = await self.db.relationships.get(choice.person.id) if choice.person else None
+        person = (
+            f"About {choice.person.display_name}: {rel.opinion if rel else 'you know them'} "
+            f"(they are not here right now).\n"
+            if choice.person
+            else ""
+        )
+        data = await self._ask(
+            prompts.OWN_ACTIVITY.format(
+                name=self.name,
+                intent=choice.intent,
+                why=choice.why or "I just wanted to.",
+                mood=self._mood(),
+                memories="\n".join(distinct([_dated(h.record, 1200) for h in hits])[:6])
+                or "- nothing specific",
+                person=person,
+            ),
+            temperature=0.8,
+        )
+        did = _prose(data.get("what_i_did"))
+        insight = _prose(data.get("insight"), 4000)
+        if did:
+            await self._keep(did, MemoryKind.THOUGHT, importance=0.3, person=choice.person)
+        if insight and await self._keep(
+            insight, MemoryKind.REFLECTION, importance=0.6, person=choice.person
+        ):
+            self.emotions.affect.on_learning(0.5)
+        notes = await self._about_self(data)
+        needs = _text(data.get("needs_tools"), 1000)
+        busy = self.current_project() if self.current_project is not None else None
+        if needs and needs.lower() not in {"null", "none"} and self.submit_task is not None:
+            if busy:
+                notes.append(
+                    f"I'd like to use my tools for this ({needs}), once I've finished "
+                    "what I'm already working on."
+                )
+                self.note(f"You wanted to do this with your tools when you're free: {needs}")
+            else:
+                own_task = Choice(
+                    kind="free",
+                    intent=f"{choice.intent}: {needs}",
+                    why=choice.why,
+                    person=None,
+                    goal_id=None,
+                    rest_s=choice.rest_s,
+                )
+                notes.append(await self._do_free(own_task, activity, signals))
+        if choice.person is None and did:  # the world page is public
+            await self.world.set_action("thinking", did)
+        await self.bus.publish(
+            "mind.thought", thought=did, user_id=choice.person.id if choice.person else None
+        )
+        return "\n".join(
+            [did or "I spent a while on it.", *([f"Insight: {insight}"] if insight else []), *notes]
+        )
+
     async def _do_wander(
         self, choice: Choice, activity: ActivityRecord, signals: BodySignals
     ) -> str:
@@ -754,13 +845,11 @@ class Agency:
     async def _do_journal(
         self, choice: Choice, activity: ActivityRecord, signals: BodySignals
     ) -> str:
-        recent = await self.db.activities.recent(limit=12)
-        lines = [
-            f"- {a.started_at:%m-%d %H:%M} {a.kind}: {a.intent[:400]}"
-            + (f" -> {a.outcome[:600]}" if a.outcome else "")
-            for a in recent
-            if a.id != activity.id
-        ]
+        recent = [a for a in await self.db.activities.recent(limit=40) if a.id != activity.id]
+        for a in recent:
+            if a.kind == "journal":  # an earlier entry by its title only: it was copied whole
+                a.outcome = f"(an entry titled “{a.outcome.splitlines()[0][:120]}”)"
+        lines = _recent_lines(recent, groups=12).splitlines()
         since = self.clock.now() - timedelta(hours=24)
         talked = await self.db.conversations.count_since(since, role="user")
         lines.append(f"- people sent you {talked} messages in the last day")

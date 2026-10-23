@@ -90,6 +90,12 @@ class RoutingConfig(BaseModel):
     fallback_to_other_tier: bool = True
     circuit_failure_threshold: int = Field(default=3, ge=1)
     circuit_cooldown_s: float = Field(default=60.0, ge=0)
+    wait_for_model_s: float = Field(
+        default=180.0,
+        ge=0,
+        description="When no model server can be reached at all (restarting, or paused for a "
+        "picture), wait this long for one to come back before giving up on a request.",
+    )
 
 
 class ModelsConfig(BaseModel):
@@ -320,6 +326,12 @@ class MindConfig(BaseModel):
         default=True, description="Check each reply against memory before sending it."
     )
     appraise_relationships: bool = True
+    appraise_after_quiet_s: float = Field(
+        default=120.0,
+        ge=0,
+        description="Think about a person once their messages pause this long, not after every "
+        "message (per message, a dozen small steps maxed every relationship within an hour).",
+    )
     max_beliefs_per_day: int = Field(
         default=20,
         ge=1,
@@ -370,8 +382,10 @@ class MindConfig(BaseModel):
             "pursue_goal",
             "new_goal",
             "rest",
+            "own",
         ],
-        description="What Fuzzy may choose to do when nobody needs it.",
+        description="What Fuzzy may choose to do when nobody needs it. 'own' lets it do anything "
+        "else it comes up with, in its own words (the rest are suggestions it is shown).",
     )
 
 
@@ -447,6 +461,7 @@ class AccountsConfig(BaseModel):
             "self_reflect",
             "image_generate",
             "world_look",  # it can talk about its world; changing it is Fuzzy's own choice only
+            "plan_later",  # ...but it can note that it means to, and decide in its own time
         ],
         description="Tools Fuzzy may use in conversations with people who are not admins.",
     )

@@ -79,6 +79,7 @@ class Runtime:
         # Short follow-up thinking (e.g. forming an opinion of someone after a chat). It never
         # holds up the next conversation, but stops with the kill switch and at shutdown.
         self._afterthoughts: set[asyncio.Task[Any]] = set()
+        self._appraisal_waits: dict[str, asyncio.Task[Any]] = {}  # per person, until it begins
         self._done: dict[str, asyncio.Event] = {}
         self._goal_last: dict[str, float] = {}
         clock = components.clock
@@ -406,14 +407,31 @@ class Runtime:
             if user is not None:
                 c.agency.note(f"You talked with {user.display_name}.")
                 if self.settings.mind.appraise_relationships:
-                    self._start_afterthought(
-                        self._after_conversation(user, session_id), f"appraise:{user.id}"
-                    )
+                    self._appraise_when_quiet(user, session_id)
         return ChatReply(
             task=final,
             answer=answer,
             confidence=float(confidence) if confidence is not None else None,
             media=media,
+        )
+
+    def _appraise_when_quiet(self, user: UserRecord, session_id: str) -> None:
+        """Think about the person once the visit pauses, about the whole exchange.
+
+        Each new message restarts the wait; once the appraisal itself has begun it runs to the
+        end."""
+
+        waiting = self._appraisal_waits.pop(user.id, None)
+        if waiting is not None and not waiting.done():
+            waiting.cancel()
+
+        async def wait_then_appraise() -> None:
+            await asyncio.sleep(self.settings.mind.appraise_after_quiet_s)
+            self._appraisal_waits.pop(user.id, None)  # from here on, it isn't interrupted
+            await self._after_conversation(user, session_id)
+
+        self._appraisal_waits[user.id] = self._start_afterthought(
+            wait_then_appraise(), f"appraise:{user.id}"
         )
 
     async def _after_conversation(self, user: UserRecord, session_id: str) -> None:
@@ -628,7 +646,7 @@ class Runtime:
 
         handle.add_done_callback(done)
 
-    def _start_afterthought(self, coro: Any, name: str) -> None:
+    def _start_afterthought(self, coro: Any, name: str) -> asyncio.Task[Any]:
         handle = asyncio.create_task(coro, name=name)
         self._afterthoughts.add(handle)
 
@@ -640,6 +658,7 @@ class Runtime:
                 )
 
         handle.add_done_callback(done)
+        return handle
 
     def _notify(self, task_id: str) -> None:
         event = self._done.get(task_id)

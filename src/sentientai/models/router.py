@@ -15,6 +15,8 @@ down the router falls back to the other one.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass
 
 from sentientai.config import RoutingConfig
@@ -160,30 +162,44 @@ class ModelRouter:
         order = [decision.tier]
         if self.config.fallback_to_other_tier:
             order += [t for t in self.clients if t not in order]
-        errors: list[str] = []
-        for tier in order:
-            breaker = self.breakers[tier]
-            if not breaker.allow():
-                errors.append(f"{tier.value}: circuit open")
-                continue
-            client = self.clients[tier]
-            if self.rate_limiter is not None:
-                await self.rate_limiter.acquire(timeout=120)
-            try:
-                response = await client.chat(request)
-            except ModelError as exc:
-                breaker.failure()
-                errors.append(f"{tier.value}: {exc}")
-                self._observe(tier, "error", None)
-                log.warning(
-                    "model tier failed", extra={"tier": tier.value, "error": str(exc)[:200]}
-                )
-                continue
-            breaker.success()
-            response.tier = tier
-            self._observe(tier, "ok" if tier == decision.tier else "fallback", response)
-            return response
-        raise ModelUnavailableError("no model tier available: " + "; ".join(errors))
+        # Every server can be briefly unreachable at once: a restart, or (with one model on both
+        # cards) while it is paused for a picture. Then wait for one to come back rather than
+        # fail a person's reply; real errors (a bad request, a crash mid-answer) still fail fast.
+        deadline = time.monotonic() + self.config.wait_for_model_s
+        waited = False
+        while True:
+            errors: list[str] = []
+            unreachable = True
+            for tier in order:
+                breaker = self.breakers[tier]
+                if not breaker.allow():
+                    errors.append(f"{tier.value}: circuit open")
+                    continue
+                client = self.clients[tier]
+                if self.rate_limiter is not None:
+                    await self.rate_limiter.acquire(timeout=120)
+                try:
+                    response = await client.chat(request)
+                except ModelError as exc:
+                    breaker.failure()
+                    errors.append(f"{tier.value}: {exc}")
+                    unreachable = unreachable and isinstance(exc, ModelUnavailableError)
+                    self._observe(tier, "error", None)
+                    log.warning(
+                        "model tier failed", extra={"tier": tier.value, "error": str(exc)[:200]}
+                    )
+                    continue
+                breaker.success()
+                response.tier = tier
+                self._observe(tier, "ok" if tier == decision.tier else "fallback", response)
+                return response
+            remaining = deadline - time.monotonic()
+            if not unreachable or remaining <= 0:
+                raise ModelUnavailableError("no model tier available: " + "; ".join(errors))
+            if not waited:
+                log.warning("no model server reachable; waiting for one to come back")
+                waited = True
+            await asyncio.sleep(min(5.0, remaining))
 
     def _observe(self, tier: ModelTier, outcome: str, response: ChatResponse | None) -> None:
         if self.metrics is None:

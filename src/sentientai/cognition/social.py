@@ -67,6 +67,16 @@ class Absence:
         return self.hours / self.usual_hours if self.usual_hours else 0.0
 
 
+def _step(value: float, delta: float, lo: float, hi: float) -> float:
+    """Move ``value`` by ``delta``, by less as it nears the end of the scale it's moving toward.
+
+    Fondness or trust can always grow, but never pins at the very end after a few kind words:
+    in its last quarter each step shrinks with the room that is left."""
+
+    room = (hi - value) if delta > 0 else (value - lo)
+    return max(lo, min(hi, value + delta * min(1.0, room / 0.25)))
+
+
 class Relationships:
     def __init__(
         self,
@@ -164,8 +174,8 @@ class Relationships:
                 rel.feelings = feelings
             d_aff = _num(data.get("affinity_change"), -MAX_STEP, MAX_STEP)
             d_trust = _num(data.get("trust_change"), -MAX_STEP, MAX_STEP)
-            rel.affinity = max(-1.0, min(1.0, rel.affinity + d_aff))
-            rel.trust = max(0.0, min(1.0, rel.trust + d_trust))
+            rel.affinity = _step(rel.affinity, d_aff, -1.0, 1.0)
+            rel.trust = _step(rel.trust, d_trust, 0.0, 1.0)
             nickname = " ".join(str(data.get("nickname") or "").split())[:40]
             if nickname and nickname.lower() not in {"null", "none"}:
                 rel.nickname = nickname

@@ -59,7 +59,7 @@ _KIND_BY_TASK = {
 
 # "I made you a picture", "let me create an image", "here's your painting"...
 _PICTURE_CLAIM = re.compile(
-    r"\b(?:i(?:'ll| will|'m going to| am going to| can| just)?\s+(?:make|create|generate|draw|"
+    r"\b(?:i(?:'ll| will|'m going to| am going to| just)?\s+(?:make|create|generate|draw|"
     r"paint|render)|let me (?:make|create|generate|draw|paint|render)|here(?:'s| is) (?:your|the|a|"
     r"an)|i(?:'ve| have)?\s+(?:made|created|generated|drawn|painted|rendered))\b[^.!?\n]{0,60}?"
     r"\b(?:image|picture|painting|drawing|illustration|artwork|portrait|photo)s?\b",
@@ -69,6 +69,114 @@ _PICTURE_CLAIM = re.compile(
 
 def claims_picture(text: str) -> bool:
     return bool(_PICTURE_CLAIM.search(text))
+
+
+@dataclass(frozen=True)
+class _Claim:
+    """Something a reply can say it did that only a tool makes true."""
+
+    kind: str
+    pattern: re.Pattern[str]
+    tools: frozenset[str]
+    nudge: str
+
+
+_DID = (
+    r"\b(?:i(?:'ve| have)?\s+(?:just\s+|now\s+|already\s+|successfully\s+)*|"
+    r"(?:it |this |that |the \w+ )?(?:has|have) been (?:successfully\s+)?)"
+)
+_CLAIMS = (
+    _Claim(
+        "world",
+        re.compile(
+            _DID + r"(?:built|added|created|made|placed|put|designed|set up)\b[^.!?\n]{0,80}?"
+            r"\b(?:world|house|home|building|tower|garden|character|room)\b",
+            re.IGNORECASE,
+        ),
+        frozenset({"world_build", "world_modify", "world_remove", "world_expand", "avatar_design"}),
+        "Nothing in your world has changed: no world tool ran (your world is yours to shape in "
+        "your own time, not during a conversation). If you want to make it, note it with "
+        "plan_later and say you'll do it later.",
+    ),
+    _Claim(
+        "web",
+        re.compile(
+            _DID + r"(?:found|fetched|searched|scanned|looked up|browsed|visited|opened|watched)\b"
+            r"[^.!?\n]{0,80}?\b(?:video|website|site|web ?page|page|internet|web|domain|wiki\w*|"
+            r"article|link|url|channel)s?\b",
+            re.IGNORECASE,
+        ),
+        frozenset({"web_search", "web_fetch", "http_request"}),
+        "You haven't looked anything up: no web tool ran. Use web_search or web_fetch now, or "
+        "reply without saying you found, opened or read anything online.",
+    ),
+    _Claim(
+        "memory",
+        re.compile(
+            r"\b(?:updated|added (?:it |this |that )?to|saved (?:it |this |that )?(?:to|in)|"
+            r"stored (?:it |this |that )?in) my memory\b",
+            re.IGNORECASE,
+        ),
+        frozenset({"memory_remember", "self_define", "plan_later"}),
+        "Nothing was saved: no memory tool ran. Call memory_remember now if you want to keep it, "
+        "or reply without saying you saved it.",
+    ),
+    _Claim(
+        "reading",
+        re.compile(
+            _DID + r"(?:read|processed|finished reading|studied|scanned|gone through)\b"
+            r"[^.!?\n]{0,60}?\b(?:you (?:gave|provided|taught|sent)|materials?|data|documents?|"
+            r"websites?|texts?|files?|info\w*)\b",
+            re.IGNORECASE,
+        ),
+        frozenset({"memory_recall", "fs_read", "web_fetch", "ingest"}),
+        "You haven't read it: no tool ran. Use memory_recall to look through what you were "
+        "taught, or note it with plan_later and say you'll read it in your own time.",
+    ),
+)
+# "Let me show you some examples." and nothing else: a promise with nothing delivered.
+_PROMISE = re.compile(
+    r"(?:^|[.!?]\s+)(?:let me|i will now|i'll now|i will|i'll|i am going to|i'm going to|"
+    r"i'll go ahead and)\s+[^.!?\n]{0,60}?\b(?:show|share|demonstrate|begin|start|give|write|"
+    r"provide|explain|list|tell|walk you through)\b[^.!?\n]{0,80}[.!?:]?\s*$",
+    re.IGNORECASE,
+)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _key(sentence: str) -> str:
+    return " ".join(sentence.casefold().split()).strip(" .!?")
+
+
+def tidy_reply(text: str, previous: list[str] | None = None) -> str:
+    """Take out what a small model does to a conversation, without rewriting what it said.
+
+    - a sentence it already said in one of its last few replies (it copied its earlier replies
+      into each new one, so every message to one person began "I am alf, and I am content..."),
+    - a loop: the same sentence again within the reply, or a long run of sentences that all
+      start the same way ("I think it's a ... I think it's a ..."), cut where it starts.
+    Replies with code are left alone, and nothing is ever reduced to empty.
+    """
+
+    if "```" in text or not text.strip():
+        return text
+    said = {_key(s) for p in previous or [] for s in _SENTENCE.split(p) if len(_key(s)) > 24}
+    kept: list[str] = []
+    seen: set[str] = set()
+    for sentence in _SENTENCE.split(text.strip()):
+        key = _key(sentence)
+        if len(key) > 12 and key in seen:
+            break  # it has started going round in circles
+        if key in said:
+            continue  # it already told them this
+        starts = [" ".join(_key(s).split()[:3]) for s in kept[-4:]]
+        opener = " ".join(key.split()[:3])
+        if len(starts) == 4 and len(opener) > 6 and all(s == opener for s in starts):
+            break
+        seen.add(key)
+        kept.append(sentence)
+    tidy = " ".join(kept).strip()
+    return tidy or text
 
 
 @dataclass
@@ -312,8 +420,18 @@ class CognitiveAgent:
         temperature = self._temperature(tier_for_window, modulation.temperature_offset)
 
         answer, response = await self._converse(
-            outcome, guard, ctx, kind=kind, prefer=prefer, temperature=temperature, allowed=allowed
+            outcome,
+            guard,
+            ctx,
+            kind=kind,
+            prefer=prefer,
+            temperature=temperature,
+            allowed=allowed,
+            goal=task.goal,
         )
+        said = [t.content for t in history if t.role == "assistant"][-4:]
+        if task.kind == "chat":
+            answer = tidy_reply(answer, said)
         outcome.tier = response.tier
         grounded_chat = (
             task.kind == "chat" and self.grounding is not None and self.settings.mind.grounding
@@ -353,7 +471,10 @@ class CognitiveAgent:
                 prefer=ModelTier.HEAVY,
                 temperature=temperature,
                 allowed=allowed,
+                goal=task.goal,
             )
+            if task.kind == "chat":
+                answer = tidy_reply(answer, said)
             outcome.tier = response.tier
             outcome.escalated = True
             assessment, answer = await judge(answer)
@@ -420,12 +541,23 @@ class CognitiveAgent:
         prefer: ModelTier | None,
         temperature: float | None,
         allowed: frozenset[str] | None = None,
+        goal: str = "",
     ) -> tuple[str, ChatResponse]:
         tools = self.registry.schemas(
             names=sorted(allowed) if allowed is not None else None, autonomous=ctx.autonomous
         )
+        available = {t.name for t in tools}
+        conversation = kind is TaskKind.CHAT
+        # What the corrections below remind it to answer (a person's words, or its own task).
+        asked = (
+            f"\n\nTheir message, which your reply answers: {goal[:1500]}"
+            if conversation
+            else f"\n\nYour task: {goal[:1500]}"
+        )
         nudges = 0
         picture_checks = 0
+        claims_checked: set[str] = set()
+        promised = False
         force_picture = False
         while True:
             guard.begin_step()
@@ -443,6 +575,9 @@ class CognitiveAgent:
                     else tools,
                     temperature=temperature,
                     tool_choice="required" if force_picture else None,
+                    # A reply to a person, not an essay: a looping model otherwise ran on for
+                    # minutes (4096 tokens of the same sentences).
+                    max_tokens=1500 if conversation else None,
                 ),
                 kind=kind,
                 prefer=prefer,
@@ -515,16 +650,69 @@ class CognitiveAgent:
                 else:
                     outcome.transcript.append(
                         Message.user(
-                            "No picture has been made: image_generate hasn't run. If you want to "
-                            "make one, call image_generate now. Otherwise reply again without "
-                            "saying you made, are making or are showing a picture."
-                            if can_draw
-                            else "You can't make pictures right now: no image generator is set up "
-                            "on this server. Reply again and say so plainly. Don't claim to make, "
-                            "show or describe a picture you didn't make."
+                            (
+                                "No picture has been made: image_generate hasn't run. If you want "
+                                "to make one, call image_generate now. Otherwise write your reply "
+                                "again, to what they actually said, without saying you made, "
+                                "are making or are showing a picture (and without mentioning "
+                                "this note)."
+                                if can_draw
+                                else "You can't make pictures right now: no image generator is set "
+                                "up on this server. Write your reply again, to what they actually "
+                                "said; if they asked for a picture, say plainly that you can't. "
+                                "Don't mention this note."
+                            )
+                            + asked
                         )
                     )
                     continue
+            used = {t.name for t in outcome.tools}
+            claim = next(
+                (
+                    c
+                    for c in _CLAIMS
+                    if answer
+                    and c.kind not in claims_checked
+                    and not used & c.tools
+                    and c.pattern.search(answer)
+                ),
+                None,
+            )
+            if claim is not None and len(claims_checked) < 2:
+                # It says it did something only a tool does, and no such tool ran. Small models
+                # do this all the time ("The house has been added to your world"). One chance to
+                # actually do it, or to answer honestly.
+                claims_checked.add(claim.kind)
+                note = (
+                    claim.nudge
+                    if available & claim.tools or claim.kind == "world"
+                    else "You didn't do that: no tool for it ran, and you don't have one in this "
+                    "conversation. If it's something you want to do in your own time, note it "
+                    "with plan_later."
+                )
+                outcome.transcript.append(
+                    Message.user(
+                        f"{note} Write your reply again, to what they actually said, without "
+                        f"claiming it's done (and without mentioning this note).{asked}"
+                    )
+                )
+                continue
+            if (
+                conversation
+                and not promised
+                and not used
+                and len(answer) < 400
+                and _PROMISE.search(answer)
+            ):
+                # "Let me show you some examples." and nothing more: it promised and stopped.
+                promised = True
+                outcome.transcript.append(
+                    Message.user(
+                        "You said you would, but your reply stops there. Do it now, in this "
+                        f"reply: write the actual thing itself.{asked}"
+                    )
+                )
+                continue
             await self.audit.record(
                 "agent.answer", task_id=ctx.task_id, tier=str(response.tier), answer=answer
             )

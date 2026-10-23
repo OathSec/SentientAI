@@ -38,9 +38,10 @@ def make_settings(tmp_path: Path, **overrides: Any) -> Settings:
         },
         "sandbox": {"backend": "disabled"},
         "web": {"search_backend": "disabled"},
-        "models": {"embedding": {"dimensions": 256}},
+        "models": {"embedding": {"dimensions": 256}, "routing": {"wait_for_model_s": 0}},
         "limits": {"llm_requests_per_minute": 1e6, "tool_calls_per_minute": 1e6, "max_steps": 8},
         "runtime": {"tick_interval_s": 0.02, "checkpoint_interval_s": 1, "autonomy": "reactive"},
+        "mind": {"appraise_after_quiet_s": 0},
     }
     for key, value in overrides.items():
         base[key] = {**base.get(key, {}), **value}
@@ -252,7 +253,15 @@ async def test_kill_switch_cancels_and_pauses(runtime_factory: Any) -> None:
 
 async def test_restart_continuity_and_recovery(runtime_factory: Any, tmp_path: Path) -> None:
     brain = Brain(
-        ["Noted: the deploy window is Friday."],
+        [
+            call(
+                "memory_remember",
+                content="Deploy window is Friday afternoon",
+                subject_key="ops.deploy_window",
+                importance=0.8,
+            ),
+            "Noted: the deploy window is Friday.",
+        ],
         reflection={
             "summary": "Learned the deploy window.",
             "lessons": [],

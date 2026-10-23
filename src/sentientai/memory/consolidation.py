@@ -31,8 +31,17 @@ log = get_logger(__name__)
 _SUBJECT_KEY = re.compile(r"^[a-z0-9][a-z0-9_.:\-]{1,120}$")
 _JUNK = re.compile(
     r"^(the (user|operator) (asked|said|wants to know)|the assistant|i (think|believe)|"
-    r"this conversation|hello|hi\b|thanks)",
+    r"this conversation|hello|hi\b|thanks|"
+    # Seen as "facts" after chats: Fuzzy's own words ("I am at peace with myself."), quotes of
+    # a speaker ("user: die", "assistant: I have processed the data"), and notes about the task.
+    r"(i|i'm|i've|my|me|we|our)\b|(assistant|user)\s*:|"
+    r"the (task|conversation|interaction|exchange|reflection|reply|answer)\b)",
     re.IGNORECASE,
+)
+# Placeholder topics a small model fills in when there's nothing durable to say.
+_GENERIC_KEY = re.compile(
+    r"^(task|topic|conversation|interaction|reflection|emotion|feeling|connection|understanding|"
+    r"communication|adaptation|processing)(\.|$)|\.key$"
 )
 _CHECKPOINT_KEY = "consolidation.last_run"
 
@@ -54,7 +63,9 @@ def valid_fact(
         return False
     if confidence < min_confidence:
         return False
-    if subject_key is not None and not _SUBJECT_KEY.match(subject_key):
+    if subject_key is not None and (
+        not _SUBJECT_KEY.match(subject_key) or _GENERIC_KEY.search(subject_key)
+    ):
         return False
     return not _JUNK.match(statement)
 

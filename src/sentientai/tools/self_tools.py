@@ -6,8 +6,9 @@ from typing import Any
 
 from pydantic import Field
 
+from sentientai.cognition.intentions import Intentions
 from sentientai.cognition.selfhood import SelfConcept, normalize_aspect
-from sentientai.storage.database import ConversationRepository
+from sentientai.storage.database import ConversationRepository, UserRepository
 from sentientai.tools.base import Tool, ToolArgs, ToolContext, ToolResult
 
 
@@ -48,6 +49,12 @@ class SelfDefine(Tool[DefineArgs]):
             args.aspect, args.value, args.reasoning, source=_source(ctx)
         )
         b = change.belief
+        if change.status == "given":
+            return ToolResult.failure(
+                "Your name was given to you; it isn't something you decide here. If they were "
+                "telling you *their* name or what to call *them*, that's about them: keep it with "
+                "memory_remember."
+            )
         if change.status == "deferred":
             return ToolResult.success(
                 "You've settled a lot about yourself today. Give it time: answer without "
@@ -84,6 +91,8 @@ class SelfRevise(Tool[ReviseArgs]):
         change = await self.selfhood.consider(
             args.aspect, args.new_value, args.reasoning, source=_source(ctx)
         )
+        if change.status == "given":
+            return ToolResult.failure("Your name was given to you; it isn't something you change.")
         if change.status == "deferred":
             return ToolResult.success(
                 "You're already weighing several possible changes. Finish thinking those over "
@@ -161,10 +170,49 @@ class ConversationSearch(Tool[SearchArgs]):
         )
 
 
-def self_tools(selfhood: SelfConcept, conversations: ConversationRepository) -> list[Tool[Any]]:
-    return [
+class PlanArgs(ToolArgs):
+    what: str = Field(min_length=3, max_length=500, description="What you mean to do, your words.")
+    why: str = Field(default="", max_length=500, description="Why you want to.")
+
+
+class PlanLater(Tool[PlanArgs]):
+    name = "plan_later"
+    description = (
+        "Note something you want to do later, in your own time: things a conversation can't do, "
+        "like exploring the web at length, building or changing your world, reading what you "
+        "were taught, or making something. You'll see it when you have time to yourself and "
+        "decide then. Use it instead of saying you've already done it."
+    )
+    args_model = PlanArgs
+    tags = ("self",)
+
+    def __init__(self, intentions: Intentions, users: UserRepository) -> None:
+        self.intentions = intentions
+        self.users = users
+
+    async def run(self, args: PlanArgs, ctx: ToolContext) -> ToolResult:
+        user = await self.users.get(ctx.user_id) if ctx.user_id else None
+        await self.intentions.add(
+            args.what, args.why, for_whom=user.display_name if user else None, user_id=ctx.user_id
+        )
+        return ToolResult.success(
+            "Noted: you'll see it when you have time to yourself, and decide then. It isn't done "
+            "yet, so say honestly that you'll get to it later."
+        )
+
+
+def self_tools(
+    selfhood: SelfConcept,
+    conversations: ConversationRepository,
+    intentions: Intentions | None = None,
+    users: UserRepository | None = None,
+) -> list[Tool[Any]]:
+    tools: list[Tool[Any]] = [
         SelfDefine(selfhood),
         SelfRevise(selfhood),
         SelfReflect(selfhood),
         ConversationSearch(conversations),
     ]
+    if intentions is not None and users is not None:
+        tools.append(PlanLater(intentions, users))
+    return tools

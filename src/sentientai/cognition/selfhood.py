@@ -44,6 +44,16 @@ def normalize_aspect(text: str) -> str:
     return "_".join(words)[:64]
 
 
+def is_given(aspect: str) -> bool:
+    """Its name is given (``identity.name``), not something it settles in a conversation.
+
+    "Can you change my name?" was once recorded as Fuzzy's own name, and that person's name then
+    followed it into everyone else's conversations ("I am alf")."""
+
+    words = set(aspect.split("_"))
+    return bool(words & {"name", "names", "nickname", "called"})
+
+
 def _clean(text: str, limit: int) -> str:
     return " ".join(str(text).split())[:limit]
 
@@ -52,7 +62,7 @@ def _clean(text: str, limit: int) -> str:
 class BeliefChange:
     """What happened to a proposed belief."""
 
-    # "defined" | "unchanged" | "considering" | "already_considering" | "deferred"
+    # "defined" | "unchanged" | "considering" | "already_considering" | "deferred" | "given"
     status: str
     belief: SelfBeliefRecord
     current: SelfBeliefRecord | None = None
@@ -81,7 +91,8 @@ class SelfConcept:
 
     # ---------------------------------------------------------------- read
     async def beliefs(self) -> list[SelfBeliefRecord]:
-        return await self.repo.active()
+        # A name recorded before names were refused stays out of every prompt.
+        return [b for b in await self.repo.active() if not is_given(b.aspect)]
 
     async def get(self, aspect: str) -> SelfBeliefRecord | None:
         found = await self.repo.active(normalize_aspect(aspect))
@@ -118,6 +129,8 @@ class SelfConcept:
         value = _clean(value, 1000)
         if not key or not value:
             raise ValueError("a belief needs an aspect and a value")
+        if is_given(key):
+            return BeliefChange("given", SelfBeliefRecord(aspect=key, value=value, reasoning=""))
         async with self._lock:
             current = await self.get(key)
             if current is not None:
@@ -151,6 +164,8 @@ class SelfConcept:
 
         key = normalize_aspect(aspect)
         value = _clean(value, 1000)
+        if is_given(key):
+            return BeliefChange("given", SelfBeliefRecord(aspect=key, value=value, reasoning=""))
         current = await self.get(key)
         if current is None:
             return await self.define(key, value, reasoning, source=source)

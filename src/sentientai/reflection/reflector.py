@@ -85,7 +85,7 @@ class _Reflection(BaseModel):
 
 @dataclass
 class ReflectionResult:
-    episode: MemoryRecord
+    episode: MemoryRecord | None
     lessons: list[str] = field(default_factory=list)
     facts: list[MemoryRecord] = field(default_factory=list)
     procedure: MemoryRecord | None = None
@@ -117,6 +117,12 @@ class Reflector:
         self.narrative_every = narrative_every
 
     async def reflect(self, task: TaskRecord, outcome: TaskOutcome) -> ReflectionResult:
+        if task.kind == "chat" and not outcome.tools:
+            # A plain reply in a conversation. The conversation is already remembered word for
+            # word and summarised later; reflecting on each message as a "task" filed a "fact"
+            # every time ("The task was completed successfully.") and cost a model call.
+            await self._tally(outcome)
+            return ReflectionResult(episode=None)
         label = _outcome_label(outcome)
         data = _Reflection()
         try:
@@ -207,6 +213,12 @@ class Reflector:
                 continue
             await self.memory.record_procedure_outcome(proc_id, success=label == "success")
 
+        await self._tally(outcome)
+        return result
+
+    async def _tally(self, outcome: TaskOutcome) -> None:
+        """Its track record, and every so often a fresh look at its own story."""
+
         self_model = self.mind.self_model
         if outcome.succeeded:
             self_model.tasks_succeeded += 1
@@ -214,7 +226,6 @@ class Reflector:
             self_model.tasks_failed += 1
         if (self_model.tasks_succeeded + self_model.tasks_failed) % self.narrative_every == 0:
             await self.update_narrative()
-        return result
 
     async def update_narrative(self, kinds: tuple[MemoryKind, ...] = (MemoryKind.EPISODE,)) -> str:
         """Rewrite the autobiography from the newest memories of ``kinds`` (shared ones only)."""

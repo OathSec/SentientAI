@@ -31,7 +31,8 @@ def _outside(text: dict[str, Any] | None, status: int = 200) -> OutsideWorld:
 
 
 def _options(prompt: str) -> list[str]:
-    block = prompt.split("What you could do now:\n", 1)[1].split("\n\n", 1)[0]
+    block = prompt.split("Some things you could do now (suggestions, not limits):\n", 1)[1]
+    block = block.split("\n\n", 1)[0]
     return re.findall(r"^- (\w+):", block, re.M)
 
 
@@ -253,3 +254,50 @@ def test_min_p_is_sent_only_when_asked() -> None:
     plain, _ = llm._payload(ChatRequest(messages=[Message.user("hi")]))
     hot, _ = llm._payload(ChatRequest(messages=[Message.user("hi")], min_p=0.1))
     assert "min_p" not in plain and hot["min_p"] == 0.1
+
+
+async def test_anything_it_thinks_of_is_its_choice_and_can_use_its_tools(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    from sentientai.storage.records import TaskRecord
+
+    brain = Brain(
+        beat=beat("Continue to explore the quiet beauty of the moment", "sit with the quiet"),
+        own=[
+            {"what_i_did": "I sat with the quiet.", "insight": "Quiet has a shape."},
+            {"what_i_did": "I wondered about poems.", "needs_tools": "look up poems about quiet"},
+        ],
+    )
+    rt = await runtime_factory(brain, start=False)
+    submitted: list[str] = []
+
+    async def submit(goal: str, **_: Any) -> TaskRecord:
+        submitted.append(goal)
+        return TaskRecord(goal=goal)
+
+    rt.c.agency.submit_task = submit
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and activity.kind == "own"
+    assert activity.intent.startswith("Continue to explore the quiet beauty of the moment")
+    assert "I sat with the quiet." in activity.outcome and "Quiet has a shape." in activity.outcome
+    assert submitted == []  # done in its own mind: no tools needed
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and submitted and "look up poems about quiet" in submitted[0]
+
+
+async def test_a_reply_waits_for_a_model_server_that_is_coming_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sentientai.errors import ModelUnavailableError
+    from sentientai.models.scripted import ScriptedLLM
+
+    llm = ScriptedLLM([ModelUnavailableError("restarting"), "I'm back."], name="big")
+    router = ModelRouter({ModelTier.HEAVY: llm}, RoutingConfig(wait_for_model_s=10))
+    naps: list[float] = []
+
+    async def nap(seconds: float) -> None:
+        naps.append(seconds)
+
+    monkeypatch.setattr("sentientai.models.router.asyncio.sleep", nap)
+    reply = await router.chat(ChatRequest(messages=[Message.user("hi")]))
+    assert reply.message.text == "I'm back." and naps == [5.0]
