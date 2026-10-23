@@ -154,7 +154,7 @@ services:
     command: >
       -m /models/${HEAVY_MODEL:-heavy.gguf}
       --host 0.0.0.0 --port 8000
-      --n-gpu-layers 999 --ctx-size ${HEAVY_CTX_SIZE:-16384} --flash-attn on
+      --n-gpu-layers 999 --ctx-size ${HEAVY_CTX_SIZE:-16384} --flash-attn ${FLASH_ATTN:-on}
       --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${HEAVY_PARALLEL:-1}
 
   llm-fast:
@@ -172,7 +172,7 @@ services:
     command: >
       -m /models/${FAST_MODEL:-fast.gguf}
       --host 0.0.0.0 --port 8002
-      --n-gpu-layers 999 --ctx-size ${FAST_CTX_SIZE:-16384} --flash-attn on
+      --n-gpu-layers 999 --ctx-size ${FAST_CTX_SIZE:-16384} --flash-attn ${FLASH_ATTN:-on}
       --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel 2
 
   # One bigger model across BOTH cards (profile `bigmodel`, instead of `models`' two servers):
@@ -196,7 +196,7 @@ services:
       -m /models/${BIG_MODEL:-big.gguf}
       --host 0.0.0.0 --port 8000
       --n-gpu-layers 999 --split-mode layer --tensor-split ${BIG_SPLIT:-6,8}
-      --ctx-size ${BIG_CTX_SIZE:-24576} --flash-attn on
+      --ctx-size ${BIG_CTX_SIZE:-24576} --flash-attn ${FLASH_ATTN:-on}
       --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel 2
 
   # Embeddings on the CPU: tiny, and it keeps the GPUs' VRAM for the language models.

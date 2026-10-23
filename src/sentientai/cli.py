@@ -592,7 +592,12 @@ async def _probe(s: Settings, tier: str, max_tokens: int) -> None:
         raw = ApiClient.from_settings(s).request("GET", "/v1/tools/schemas")
         schemas = [ToolSchema(**t["function"]) for t in raw]
     except Exception as exc:
-        typer.secho(f"(couldn't fetch the real tool definitions: {exc})", fg="yellow")
+        typer.secho(
+            f"(couldn't fetch the real tool definitions: {exc}; wait a few seconds after a "
+            "restart and run it again)",
+            fg="yellow",
+        )
+    typer.echo(f"{len(schemas)} tool definitions loaded for the tool cases")
     system = "You are Fuzzy, a curious digital mind. Answer briefly and naturally.\n\n" + (
         _PROBE_FILLER * 28
     )
@@ -623,12 +628,13 @@ async def _probe(s: Settings, tier: str, max_tokens: int) -> None:
         text = (r.message.text or "") + "".join(f" [call {c.name}]" for c in r.message.tool_calls)
         ratio = len(zlib.compress(text.encode())) / max(1, len(text.encode()))
         looped = r.finish_reason == "length" and ratio < 0.2 and len(text) > 150
-        verdict = "LOOP (junk)" if looped else "ok"
+        empty = r.usage.completion_tokens <= 2 and not r.message.tool_calls
+        verdict = "LOOP (junk)" if looped else "EMPTY?" if empty and sys_text else "ok"
         snippet = " ".join(text.split())[:90]
         typer.secho(
             f"{label:<30} {took:5.1f}s {r.usage.prompt_tokens:>5} in "
             f"{r.usage.completion_tokens:>4} out  {verdict:<12} {snippet}",
-            fg="red" if looped else None,
+            fg="red" if looped or (empty and sys_text) else None,
         )
         await llm.aclose()
 

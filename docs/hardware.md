@@ -80,8 +80,10 @@ tiers (two slots, so a conversation and its background work don't block each oth
 heat, no cross-card traffic, and none of the 16-series half-precision quirks. A 5 to 6 GB model such as a Llama 3.1 8B
 Q5_K_M leaves room for 16k of context. See `deploy/.env.example` (Alternative 1) for the settings.
 
-If the output ever turns to gibberish (a stream of repeated digits, for example), suspect the card or the cache type:
-set `KV_TYPE=f16`, and try the model on the other card to rule hardware in or out. Watch temperatures on the Brain
+If the output ever turns to gibberish (a stream of repeated digits, for example, or an empty reply to a long prompt),
+run `sentientai probe`. If short prompts are fine and long ones are junk, suspect flash attention or the quantized
+cache on your GPU/driver combination: set `FLASH_ATTN=off` and `KV_TYPE=f16` (the f16 cache is twice the size, so
+halve the context: `HEAVY_CTX_SIZE=8192 HEAVY_PARALLEL=1 HEAVY_CTX=8192 FAST_CTX=8192`), and try the model on the other card to rule hardware in or out. Watch temperatures on the Brain
 page's System tab; a card that sits above roughly 83 C will throttle. Limiting board power usually costs little speed
 and lowers heat a lot: `sudo nvidia-smi -i <index> -pl 140` (the default for the 2070 is 175 W; it resets on reboot).
 
