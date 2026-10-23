@@ -83,6 +83,12 @@ class _Reflection(BaseModel):
         return facts
 
 
+# Tools that bring in outside information a fact can rest on.
+_EVIDENCE_TOOLS = frozenset(
+    {"fs_read", "fs_search", "web_search", "web_fetch", "http_request", "repo_overview"}
+)
+
+
 @dataclass
 class ReflectionResult:
     episode: MemoryRecord | None
@@ -183,9 +189,11 @@ class Reflector:
             self_assessment=data.self_assessment,
         )
         # In a conversation the "result" is Fuzzy's own reply, which can be wrong or invented
-        # ("The house was added to the world tab."). Facts from a conversation come from what
-        # people said, via consolidation, not from its reply.
-        for fact in data.valid_facts() if task.kind != "chat" else []:
+        # ("The house was added to the world tab."). Facts come from a conversation only when it
+        # actually read something (a file, a page); otherwise from what people said, via
+        # consolidation.
+        read = any(t.ok and t.name in _EVIDENCE_TOOLS for t in outcome.tools)
+        for fact in data.valid_facts() if task.kind != "chat" or read else []:
             key = fact.subject_key.strip().lower() if fact.subject_key else None
             if valid_fact(fact.statement, key, fact.confidence, self.min_fact_confidence):
                 result.facts.append(
