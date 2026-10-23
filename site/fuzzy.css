@@ -113,3 +113,9 @@ details p { margin: 0.7rem 0 0; color: var(--muted); }
 @media (max-width: 34rem) { .board .row { grid-template-columns: 1.6rem 1fr auto; } .board .track { display: none; } }
 
 #live { padding-top: 0.5rem; }
+
+/* small screens: nothing may push the page sideways */
+html, body { overflow-x: hidden; }
+img, video, svg, iframe, canvas { max-width: 100%; height: auto; }
+table { display: block; overflow-x: auto; }
+@media (max-width: 40rem) { html { font-size: 15px; } .bar a, nav a { padding: 0.35rem 0; } .btn, button, .button { padding: 0.65rem 1rem; } pre, code { overflow-wrap: anywhere; white-space: pre-wrap; } }
