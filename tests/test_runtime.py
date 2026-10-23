@@ -425,3 +425,23 @@ async def test_orderly_shutdown_requeues_and_resumes(runtime_factory: Any) -> No
     resumed = await rt2.wait(task.id, timeout=10)
     assert resumed.status is TaskStatus.SUCCEEDED and resumed.result == "finished after reboot"
     assert resumed.attempts == 2
+
+
+async def test_a_conversation_that_hits_a_limit_gets_a_natural_reply_not_a_status_report(
+    runtime_factory: Any,
+) -> None:
+    brain = Brain([call("fs_read", path="notes.md") for _ in range(10)])
+    rt = await runtime_factory(brain, limits={"max_repeat_calls": 2})
+    closings: list[str] = []
+    original = rt.c.router.chat
+
+    async def spy(request: Any, **kwargs: Any) -> Any:
+        closings.append(request.messages[-1].text)
+        return await original(request, **kwargs)
+
+    rt.c.router.chat = spy
+    reply = await rt.chat("s1", "heyy", timeout=10)
+    assert reply.task.metadata["loop_break"] == "repetition"
+    [stop] = [t for t in closings if t.startswith("You must stop now")]
+    assert "Reply to the person now" in stop and "what is incomplete or uncertain" not in stop
+    assert reply.answer

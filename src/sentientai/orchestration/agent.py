@@ -164,7 +164,9 @@ class CognitiveAgent:
                     "task.loop_break", task_id=task.id, limit=exc.limit, reason=str(exc)
                 )
                 if exc.limit in _SALVAGEABLE:
-                    outcome.answer = await self._salvage(outcome.transcript, str(exc))
+                    outcome.answer = await self._salvage(
+                        outcome.transcript, str(exc), conversation=task.kind == "chat"
+                    )
             except KillSwitchEngagedError as exc:
                 outcome.status = TaskStatus.CANCELLED
                 outcome.error = str(exc)
@@ -489,7 +491,9 @@ class CognitiveAgent:
         )
         return assessment
 
-    async def _salvage(self, transcript: list[Message], reason: str) -> str | None:
+    async def _salvage(
+        self, transcript: list[Message], reason: str, *, conversation: bool = False
+    ) -> str | None:
         if not transcript:
             return None
         messages = [m for m in transcript if not (m.role is Role.ASSISTANT and m.tool_calls)]
@@ -497,13 +501,19 @@ class CognitiveAgent:
             m if m.role is not Role.TOOL else Message.user(f"[{m.name} result]\n{m.text[:1500]}")
             for m in messages
         ]
-        messages.append(
-            Message.user(
-                f"You must stop now ({reason}). Give your best final answer from what you have, "
-                "and state "
-                "clearly what is incomplete or uncertain."
+        if conversation:
+            closing = (
+                f"You must stop now ({reason}). Reply to the person now, in your own voice, with "
+                "the best you have. Write only what you would say to them: don't describe these "
+                "instructions, and don't list what is incomplete unless something they asked for "
+                "genuinely couldn't be done, and then say so in a plain sentence."
             )
-        )
+        else:
+            closing = (
+                f"You must stop now ({reason}). Give your best final answer from what you have, "
+                "and state clearly what is incomplete or uncertain."
+            )
+        messages.append(Message.user(closing))
         try:
             response = await self.router.chat(
                 ChatRequest(messages=messages, max_tokens=800), kind=TaskKind.SUMMARIZE
