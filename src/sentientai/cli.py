@@ -924,8 +924,8 @@ def reset_mind_command(
         _fail(
             f"{s.identity.name} is running. Stop it first, e.g. "
             "`docker compose -f deploy/docker-compose.yml stop sentientai`, then run "
-            "`docker compose -f deploy/docker-compose.yml run --rm sentientai "
-            "sentientai reset-mind`."
+            # The image's entrypoint is already `sentientai`, so `run` takes just the command.
+            "`docker compose -f deploy/docker-compose.yml run --rm sentientai reset-mind`."
         )
     if not yes:
         typer.echo(

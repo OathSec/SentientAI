@@ -142,9 +142,12 @@ Back up first (see above), and stop the daemon: a running Fuzzy would write part
 ```bash
 docker compose -f deploy/docker-compose.yml exec -T postgres pg_dump -U sentient sentientai > fuzzy-backup.sql
 docker compose -f deploy/docker-compose.yml stop sentientai
-docker compose -f deploy/docker-compose.yml run --rm sentientai sentientai reset-mind
+docker compose -f deploy/docker-compose.yml run --rm sentientai reset-mind
 docker compose -f deploy/docker-compose.yml up -d sentientai
 ```
+
+(The container's entrypoint is already `sentientai`: with `run`, give just the command. With `exec` into a
+running container you type the full `sentientai doctor`.)
 
 It asks you to type Fuzzy's name to confirm (or pass `--yes`). On the next start it wakes up for the first time.
 
