@@ -49,6 +49,7 @@ class Config:
     only_when_idle_minutes: int = 10  # only work after this long with no keyboard or mouse
     pause_above_gpu_percent: int = 40  # stop taking work if the GPU is already this busy
     connect_on_start: bool = False
+    start_with_windows: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
     def capabilities(self) -> list[str]:
@@ -150,6 +151,10 @@ def run_llm_job(config: Config, payload: dict[str, Any], client: httpx.Client) -
         raise JobError("the model server must be on this computer")
     body = {k: v for k, v in payload.items() if k in _LLM_FIELDS}
     body["stream"] = False
+    # Fuzzy asks its models not to "think out loud" (it wastes time); Ollama spells that
+    # differently from llama.cpp, and ignores what it doesn't know.
+    body["think"] = False
+    body["reasoning_effort"] = "none"
     if config.llm_model:
         body["model"] = config.llm_model
     try:

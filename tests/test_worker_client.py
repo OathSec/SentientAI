@@ -156,3 +156,85 @@ def test_a_rejected_token_stops_it_and_a_bad_setup_is_explained() -> None:
     assert "token" in (Worker(Config(server_url="https://f.example")).problem() or "")
     bad = Config(server_url="https://f", token="fzw_x", run_llm=True, llm_url="http://10.0.0.2/v1")
     assert "this computer" in (Worker(bad).problem() or "")
+
+
+# ------------------------------------------------------------------ one-click setup
+def test_the_model_is_chosen_to_fit_the_graphics_card() -> None:
+    from fuzzy_worker.setup import recommend
+
+    assert recommend(8151)[0] == "qwen3:8b"  # an 8 GB card
+    assert recommend(16311)[0] == "qwen3:14b"
+    assert recommend(4096)[0] == "qwen3:4b"
+    assert recommend(None)[0] == "qwen3:4b" and "No NVIDIA" in recommend(None)[1]
+
+
+def test_a_connection_code_carries_the_address_and_token() -> None:
+    from fuzzy_worker.setup import make_code, parse_code
+
+    code = make_code("https://fuzzy.example", "fzw_abc-DEF_123")
+    assert code.startswith("fuzzy-worker:") and "fzw_" not in code  # not readable at a glance
+    assert parse_code(code) == ("https://fuzzy.example", "fzw_abc-DEF_123")
+    assert parse_code("  " + code + "\n") == ("https://fuzzy.example", "fzw_abc-DEF_123")
+    assert parse_code("hello") is None and parse_code("") is None
+
+
+def test_setup_installs_pulls_tunes_and_tests_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fuzzy_worker import setup
+
+    steps: list[str] = []
+    pulled: list[str] = []
+
+    def ollama(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/version":
+            return httpx.Response(200, json={"version": "0.12"})
+        if path == "/api/tags":
+            return httpx.Response(200, json={"models": []})
+        if path == "/api/pull":
+            pulled.append(json.loads(request.content)["model"])
+            lines = [{"status": "pulling", "total": 100, "completed": 50}, {"status": "success"}]
+            return httpx.Response(200, content="\n".join(json.dumps(x) for x in lines))
+        if path == "/v1/chat/completions":
+            body = json.loads(request.content)
+            assert body["model"] == "fuzzy-qwen3-8b" and body["think"] is False
+            return httpx.Response(200, json={"choices": [{"message": {"content": "Hello there!"}}]})
+        raise AssertionError(path)
+
+    monkeypatch.setattr(setup, "find_ollama", lambda: Path("C:/fake/ollama.exe"))
+    monkeypatch.setattr(setup, "gpu_info", lambda: {"gpu_memory_mb": 8151})
+    monkeypatch.setattr(
+        setup, "make_variant", lambda path, tag, report: "fuzzy-" + tag.replace(":", "-")
+    )
+    config = Config()
+    result = setup.run_setup(
+        config,
+        lambda text, fraction: steps.append(text),
+        client=httpx.Client(transport=httpx.MockTransport(ollama)),
+    )
+    assert pulled == ["qwen3:8b"]  # chosen from the 8 GB card
+    assert config.run_llm and config.llm_model == "fuzzy-qwen3-8b"
+    assert config.llm_url == "http://127.0.0.1:11434/v1" and config.capabilities() == ["llm"]
+    assert "Hello there!" in result and any("Downloading qwen3:8b" in s for s in steps)
+
+
+def test_setup_stops_with_a_plain_message_when_something_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fuzzy_worker import setup
+
+    monkeypatch.setattr(setup, "find_ollama", lambda: None)
+    with pytest.raises(setup.SetupError, match="isn't installed"):
+        setup.run_setup(Config(), lambda t, f: None, allow_install=False)
+
+    def broken(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/pull":
+            return httpx.Response(200, content=json.dumps({"error": "no space left"}))
+        return httpx.Response(200, json={"version": "1", "models": []})
+
+    monkeypatch.setattr(setup, "find_ollama", lambda: Path("x"))
+    with pytest.raises(setup.SetupError, match="no space left"):
+        setup.run_setup(
+            Config(),
+            lambda t, f: None,
+            client=httpx.Client(transport=httpx.MockTransport(broken)),
+        )

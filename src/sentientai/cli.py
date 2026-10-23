@@ -982,6 +982,13 @@ def _run_workers(work: Any) -> Any:
 @workers_app.command("create")
 def workers_create(
     name: str = typer.Argument(..., help="A name for the computer, e.g. owens-pc."),
+    url: str = typer.Option(
+        "",
+        "--url",
+        envvar="SENTIENT_PUBLIC_URL",
+        help="The public address people use for Fuzzy (https://...). With it you also get a "
+        "single connection code to paste into the worker program.",
+    ),
     private: bool = typer.Option(
         False,
         "--private",
@@ -998,6 +1005,13 @@ def workers_create(
     typer.echo(f"worker {record.name} ({record.trust}) created: {record.id}")
     typer.echo("token (shown only now):")
     typer.secho(token, fg="green")
+    if url:
+        import base64
+
+        raw = json.dumps({"s": url.rstrip("/"), "t": token}, separators=(",", ":")).encode()
+        code = "fuzzy-worker:" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        typer.echo("connection code (paste this into FuzzyWorker; it holds the address and token):")
+        typer.secho(code, fg="green")
 
 
 @workers_app.command("list")

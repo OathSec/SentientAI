@@ -212,3 +212,23 @@ async def test_pictures_go_to_workers_by_trust(stack: Any, tmp_path: Path) -> No
     await images.create("another secret", user_id="u1", public=False)
     await task
     assert local_drawn == ["a secret picture for Alf"]  # the owner's own PC may draw private ones
+
+
+def test_the_operator_cli_prints_a_connection_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from fuzzy_worker.setup import parse_code
+    from sentientai.cli import app
+
+    (tmp_path / "data").mkdir()
+    monkeypatch.setenv("SENTIENT_STORAGE__DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("SENTIENT_CONFIG", raising=False)
+    result = CliRunner().invoke(
+        app, ["workers", "create", "owens-pc", "--private", "--url", "https://fuzzy.example/"]
+    )
+    assert result.exit_code == 0, result.output
+    token = next(w for w in result.output.split() if w.startswith("fzw_"))
+    code = next(w for w in result.output.split() if w.startswith("fuzzy-worker:"))
+    assert parse_code(code) == ("https://fuzzy.example", token)

@@ -50,7 +50,13 @@ docker compose -f deploy/docker-compose.yml exec sentientai sentientai workers r
 
 The token is shown once. Give it to the person with the site address (the same one they chat on).
 
-On the PC:
+On the PC (the easy way): open `FuzzyWorker.exe`. The **Set up this PC** tab detects the
+graphics card, recommends a model that fits (8 GB card: Qwen3 8B; 16 GB: 14B), and **Set
+everything up** installs Ollama (signature-checked installer from ollama.com), downloads the
+model, gives it the 12k context Fuzzy needs, and tests it. Then on **Home**, paste the
+**connection code** (`workers create NAME --url https://your-site` prints one) and press Start.
+
+On the PC (by hand):
 
 1. Run a model server: **Ollama** or **LM Studio** for chat (pull the same model Fuzzy uses,
    e.g. `ollama pull qwen3:14b`), and/or **Stable Diffusion WebUI** (started with `--api`)
