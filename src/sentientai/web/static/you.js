@@ -32,6 +32,28 @@
     }
   }
 
+  async function loadInvites() {
+    const d = await api("/api/me/invites");
+    const box = clear($("invites"));
+    const left = d.left === null ? "as many as you like" : d.left + " of " + d.allowed + " left";
+    box.append(el("p", { class: "muted" }, "Give a friend a one-time code so they can join. You can invite " + left + "."));
+    const shown = el("div", {});
+    const make = el("button", { class: "primary", disabled: d.left === 0 ? true : null, onclick: async () => {
+      try {
+        const r = await api("/api/me/invites", { method: "POST", body: {} });
+        const code = el("input", { type: "text", readonly: true, value: r.code, class: "code" });
+        clear(shown).append(el("p", {}, "Share this code now; it's shown only once and works for " + r.expires_in_days + " days:"), code,
+          el("button", { onclick: async () => { code.select(); try { await navigator.clipboard.writeText(r.code); } catch (e) { document.execCommand("copy"); } } }, "Copy"));
+        loadInvites();
+      } catch (e) { clear(shown).append(el("p", { class: "notice error" }, e.message)); }
+    } }, "Make an invite code");
+    box.append(make, shown);
+    if (d.invites.length) {
+      box.append(el("ul", { class: "plain mt-s" }, d.invites.map((i) => el("li", { class: "small" },
+        i.status === "joined" ? (i.joined || "Someone") + " joined" : i.status === "waiting" ? "Waiting for a friend (until " + clock(i.expires_at) + ")" : "Expired"))));
+    }
+  }
+
   async function loadNotes() {
     const data = await api("/api/notes");
     const box = clear($("notes"));
@@ -89,6 +111,6 @@
   const lim = me.limits;
   $("usage").textContent = "Today: " + me.usage.messages + (lim.messages ? " of " + lim.messages : "") + " messages" +
     (me.image_generation ? ", " + me.usage.images + (lim.images ? " of " + lim.images : "") + " images." : ".");
-  await Promise.all([loadRelationship(), loadNotes()]);
+  await Promise.all([loadRelationship(), loadNotes(), loadInvites()]);
   loadTotp();
 })();

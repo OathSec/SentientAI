@@ -85,3 +85,9 @@ details p { margin: 0.7rem 0 0; color: var(--muted); }
 .foot-links a { color: var(--muted); text-decoration: none; } .foot-links a:hover { color: var(--ink); }
 @media (max-width: 40rem) { .bar { flex-wrap: wrap; gap: 0.6rem 1rem; } nav { order: 3; flex-basis: 100%; } .hero { padding-top: 3rem; } }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+[hidden] { display: none !important; }
+.tiles { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); margin: 1rem 0 1.5rem; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0.7rem 0.9rem; }
+.tile .num { font-size: 1.6rem; font-weight: 650; line-height: 1.2; }
+.leaders { margin: 0.5rem 0; padding-left: 1.4rem; } .leaders li { padding: 0.15rem 0; }

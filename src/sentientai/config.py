@@ -485,6 +485,8 @@ class AccountsConfig(BaseModel):
     """People who talk to Fuzzy through the public web app."""
 
     registration: Literal["open", "invite", "closed"] = "invite"
+    invites_per_person: int = Field(default=3, ge=0, description="Friends each person may invite.")
+    invite_days: float = Field(default=14.0, gt=0, description="How long a friend's invite lasts.")
     session_days: float = Field(default=14.0, gt=0, description="Absolute session lifetime.")
     idle_hours: float = Field(default=72.0, gt=0, description="Sessions expire after inactivity.")
     cookie_secure: bool = Field(default=True, description="Send cookies over HTTPS only.")

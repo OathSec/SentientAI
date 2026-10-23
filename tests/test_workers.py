@@ -556,3 +556,57 @@ async def test_an_administrator_can_say_a_computer_is_their_own_but_others_canno
     ok = await post(boss, f"/api/compute/computers/{mine['id']}/own", boss_csrf, json={"own": True})
     assert ok.json() == {"ok": True, "trust": "private"}
     assert (await boss.get("/api/compute")).json()["mine"][0]["own"]
+
+
+async def test_each_person_can_invite_a_few_friends_and_the_friend_can_join(
+    web_factory: Any,  # noqa: F811
+) -> None:
+    from tests.test_web import GOOD, post, sign_in
+
+    web = await web_factory(accounts={"registration": "invite"})
+    await web.rt.c.accounts.create_user("alex", GOOD, display_name="Alex")
+    alex = web.client()
+    csrf = await sign_in(alex, "alex")
+    assert (await alex.get("/api/me/invites")).json()["left"] == 3
+    codes = []
+    for _ in range(3):
+        made = await post(alex, "/api/me/invites", csrf, json={})
+        assert made.status_code == 201
+        codes.append(made.json()["code"])
+    assert (await post(alex, "/api/me/invites", csrf, json={})).status_code == 409  # only three
+
+    friend = web.client()
+    joined = await friend.post(
+        "/api/auth/register",
+        json={"username": "sam", "password": GOOD, "display_name": "Sam", "invite_code": codes[0]},
+    )
+    assert joined.status_code in (200, 201), joined.text
+    mine = (await alex.get("/api/me/invites")).json()
+    assert mine["left"] == 0
+    assert sorted(i["status"] for i in mine["invites"]) == ["joined", "waiting", "waiting"]
+    assert [i["joined"] for i in mine["invites"] if i["status"] == "joined"] == ["Sam"]
+    # invites made this way never grant teaching rights or admin
+    sam = web.client()
+    await sign_in(sam, "sam")
+    assert (await sam.get("/api/auth/state")).json()["admin"] is False
+
+
+async def test_the_public_numbers_are_safe_to_show_and_need_no_login(
+    web_factory: Any,  # noqa: F811
+) -> None:
+    from tests.test_web import GOOD
+
+    web = await web_factory()
+    alex = await web.rt.c.accounts.create_user("alex", GOOD, display_name="Alex")
+    await web.rt.c.worker_registry.create("Alex's PC", "shared", owner_id=alex.id)
+    await web.rt.c.worker_registry.record_job(
+        (await web.rt.c.worker_registry.all())[0].id, "image", 3600, ok=True
+    )
+    await web.rt.c.memory.remember("a private thing Alex said", MemoryKind.FACT, user_id=alex.id)
+    reply = await web.client().get("/api/public/stats")  # no sign-in
+    assert reply.status_code == 200 and reply.headers["access-control-allow-origin"] == "*"
+    data = reply.json()
+    assert data["compute"]["jobs"] == 1 and data["compute"]["hours"] == 1.0
+    assert data["leaders"] == [{"name": "Alex", "jobs": 1, "hours": 1.0}]
+    assert data["fuzzy"]["memories"] >= 1 and data["fuzzy"]["people"] == 1
+    assert "private thing" not in reply.text  # counts only, never content

@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
-OUT = HERE.parent / "site-build"  # next to the repo
+OUT = HERE.parent / "site-build"
 EXE = Path(sys.argv[1]) if len(sys.argv) > 1 else None
 FUZZY = "https://entertainment.systembridge.site"
 
@@ -65,6 +65,7 @@ def page(path: str, title: str, description: str, body: str) -> None:
     </div>
   </div>
 </footer>
+<script src="/live.js" defer></script>
 </body>
 </html>
 """
@@ -76,6 +77,20 @@ def page(path: str, title: str, description: str, body: str) -> None:
 def card(title: str, text: str) -> str:
     return f'<div class="card"><h3>{title}</h3><p>{text}</p></div>'
 
+
+
+LIVE = """
+<section class="wrap block" id="live" hidden>
+  <h2>Fuzzy, live</h2>
+  <p class="muted" id="live-doing">Checking in on Fuzzy…</p>
+  <div id="live-tiles" class="tiles"></div>
+  <div class="two">
+    <div><h3>Top contributors</h3><ol id="live-board" class="leaders"></ol>
+    <p class="small muted">Ranked by GPU time lent to Fuzzy. <a href="/worker/">Join the board</a>.</p></div>
+    <p class="small muted" id="live-note"></p>
+  </div>
+</section>
+"""
 
 # ---------------------------------------------------------------------------------- home
 HOME = f"""
@@ -95,6 +110,7 @@ HOME = f"""
   </div>
 </section>
 
+{LIVE}
 <section class="wrap block">
   <h2>What makes Fuzzy different</h2>
   <p class="muted">Most chatbots wait for a prompt and forget you. Fuzzy doesn't.</p>
@@ -230,6 +246,7 @@ def worker_body() -> str:
   {check}
 </div></section>
 
+{LIVE}
 <section class="wrap block">
   <h2>Set up in three steps</h2>
   <ol class="steps">
@@ -304,10 +321,10 @@ PRIVACY = """
     <li>The program sends Fuzzy your graphics card's name and memory size, its current load and the program version, so your Compute page can show them. Nothing else about your computer.</li>
     <li>Community computers only ever get public-gallery picture jobs. Private conversations and anything about a person are never sent to them.</li>
     <li>Each computer has its own token, stored hashed on the server. Unlink a computer and its token stops working.</li>
-    <li>Your contribution (jobs, time working) is tied to your account and shown to signed-in Fuzzy users as a leaderboard with your display name.</li>
+    <li>Your contribution (jobs, time working) is tied to your account and shown on a leaderboard (here and on Fuzzy's Compute page) with your display name, plus aggregate totals. Unlink your computer to leave the board.</li>
   </ul>
   <h2>This website</h2>
-  <p>This site has no accounts, no cookies and no analytics.</p>
+  <p>This site has no accounts, no cookies and no tracking. Its live numbers are read from Fuzzy: totals only, never conversations or memories.</p>
 </section>
 """
 
@@ -320,6 +337,7 @@ def main() -> None:
     OUT.mkdir(parents=True)
     shutil.copy(HERE / "fuzzy.css", OUT / "fuzzy.css")
     shutil.copy(HERE / "icon.svg", OUT / "icon.svg")
+    shutil.copy(HERE / "live.js", OUT / "live.js")
     page("/", "Project Fuzzy: an AI that gets to live its own life", "Project Fuzzy is an experiment in giving an AI memories, feelings, opinions and time of its own. Meet Fuzzy, or lend your GPU to help it think.", HOME)
     page("/about/", "About Project Fuzzy", "Why SystemBridge is building Fuzzy: an AI with its own memory, feelings and choices, and an honest look at what that does and doesn't mean.", ABOUT)
     page("/worker/", "Fuzzy Worker: lend your GPU to Fuzzy", "A small Windows program that lets Fuzzy use your idle graphics card to think in the background. You stay in control.", worker_body())
