@@ -623,3 +623,38 @@ async def test_pages_ask_for_versioned_scripts_so_nobody_gets_a_stale_copy(
     assert re.search(r'href="/static/style\.css\?v=[0-9a-f]{10}"', page)
     asset = await web.client().get("/static/app.js")
     assert asset.headers["cache-control"] == "no-cache"
+
+
+async def test_unused_invite_codes_can_be_reviewed_and_revoked(
+    web_factory: Any,  # noqa: F811
+) -> None:
+    from tests.test_web import GOOD, post, sign_in
+
+    web = await web_factory(accounts={"registration": "invite"})
+    await web.rt.c.accounts.create_user("alex", GOOD, display_name="Alex")
+    alex = web.client()
+    csrf = await sign_in(alex, "alex")
+    codes = [(await post(alex, "/api/me/invites", csrf, json={})).json()["code"] for _ in range(3)]
+    listed = (await alex.get("/api/me/invites")).json()
+    assert listed["left"] == 0 and [i["status"] for i in listed["invites"]] == ["waiting"] * 3
+    assert all(code not in str(listed) for code in codes)  # the codes themselves are never listed
+
+    one = listed["invites"][0]["ref"]
+    gone = await alex.request(
+        "DELETE",
+        f"/api/me/invites/{one}",
+        headers={"X-CSRF-Token": csrf, "Origin": "http://test"},
+        json={},
+    )
+    assert gone.status_code == 200
+    assert (await alex.get("/api/me/invites")).json()["left"] == 1  # its place came back
+    friend = web.client()
+    refused = await friend.post(
+        "/api/auth/register",
+        json={"username": "sam", "password": GOOD, "display_name": "Sam", "invite_code": codes[0]},
+    )
+    assert refused.status_code == 403  # a revoked code no longer works
+    swept = await post(alex, "/api/me/invites/revoke-unused", csrf, json={})
+    assert (
+        swept.json() == {"revoked": 2} and (await alex.get("/api/me/invites")).json()["left"] == 3
+    )

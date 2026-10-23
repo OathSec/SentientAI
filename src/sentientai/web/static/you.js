@@ -32,25 +32,48 @@
     }
   }
 
+  let freshCode = null; // the code just made: shown once, and kept on screen when the list reloads
+  async function revoke(ref) {
+    try { await api("/api/me/invites/" + encodeURIComponent(ref), { method: "DELETE" }); } catch (e) { alert(e.message); }
+    loadInvites();
+  }
+
   async function loadInvites() {
     const d = await api("/api/me/invites");
     const box = clear($("invites"));
     const left = d.left === null ? "as many as you like" : d.left + " of " + d.allowed + " left";
     box.append(el("p", { class: "muted" }, "Give a friend a one-time code so they can join. You can invite " + left + "."));
-    const shown = el("div", {});
     const make = el("button", { class: "primary", disabled: d.left === 0 ? true : null, onclick: async () => {
       try {
-        const r = await api("/api/me/invites", { method: "POST", body: {} });
-        const code = el("input", { type: "text", readonly: true, value: r.code, class: "code" });
-        clear(shown).append(el("p", {}, "Share this code now; it's shown only once and works for " + r.expires_in_days + " days:"), code,
-          el("button", { onclick: async () => { code.select(); try { await navigator.clipboard.writeText(r.code); } catch (e) { document.execCommand("copy"); } } }, "Copy"));
-        loadInvites();
-      } catch (e) { clear(shown).append(el("p", { class: "notice error" }, e.message)); }
+        freshCode = await api("/api/me/invites", { method: "POST", body: {} });
+      } catch (e) { freshCode = { error: e.message }; }
+      loadInvites();
     } }, "Make an invite code");
-    box.append(make, shown);
+    box.append(make);
+    if (freshCode) {
+      if (freshCode.error) box.append(el("p", { class: "notice error" }, freshCode.error));
+      else {
+        const code = el("input", { type: "text", readonly: true, value: freshCode.code, class: "code" });
+        box.append(el("div", { class: "linker" },
+          el("p", {}, "Share this code now. It's shown only once and works for " + freshCode.expires_in_days + " days:"), code,
+          el("div", { class: "row" },
+            el("button", { onclick: async () => { code.select(); try { await navigator.clipboard.writeText(freshCode.code); } catch (e) { document.execCommand("copy"); } } }, "Copy"),
+            el("button", { class: "link", onclick: () => { freshCode = null; loadInvites(); } }, "Done"))));
+      }
+    }
+    const waiting = d.invites.filter((i) => i.status === "waiting");
     if (d.invites.length) {
-      box.append(el("ul", { class: "plain mt-s" }, d.invites.map((i) => el("li", { class: "small" },
-        i.status === "joined" ? (i.joined || "Someone") + " joined" : i.status === "waiting" ? "Waiting for a friend (until " + clock(i.expires_at) + ")" : "Expired"))));
+      box.append(el("h3", { class: "mt-s" }, "Your invites"),
+        el("ul", { class: "plain" }, d.invites.map((i) => el("li", { class: "row spread small" },
+          el("span", {}, i.status === "joined" ? (i.joined || "Someone") + " joined" : i.status === "waiting" ? "Unused, made " + ago(i.created_at) + ", expires " + clock(i.expires_at) : "Expired, made " + ago(i.created_at)),
+          i.status === "waiting" ? el("button", { class: "link small", onclick: () => revoke(i.ref) }, "Revoke") : null))));
+      if (waiting.length > 1) {
+        box.append(el("button", { class: "link small", onclick: async () => {
+          if (!confirm("Revoke all " + waiting.length + " unused invite codes?")) return;
+          try { await api("/api/me/invites/revoke-unused", { method: "POST", body: {} }); } catch (e) { alert(e.message); }
+          loadInvites();
+        } }, "Revoke all " + waiting.length + " unused codes"));
+      }
     }
   }
 

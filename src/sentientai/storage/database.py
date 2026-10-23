@@ -775,6 +775,13 @@ class InviteRepository(_Repository[InviteRecord]):
             )
         return bool(result.rowcount == 1)
 
+    async def delete(self, id_: str) -> None:
+        """Revoke an unused invite (a used one stays as the record of who joined)."""
+
+        t = self.table
+        async with self.engine.begin() as conn:
+            await conn.execute(t.delete().where(and_(t.c.id == id_, t.c.used_by.is_(None))))
+
     async def list(self, limit: int = 100) -> builtins.list[InviteRecord]:
         t = self.table
         return await self._select(select(t).order_by(t.c.created_at.desc()).limit(limit))

@@ -35,6 +35,7 @@ def build_community_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
             "left": None if allowed is None else max(0, allowed - len(holding)),
             "invites": [
                 {
+                    "ref": i.id[:16],  # not the code (that is never stored), just a handle
                     "created_at": i.created_at.isoformat(),
                     "expires_at": i.expires_at.isoformat(),
                     "status": "joined"
@@ -60,6 +61,41 @@ def build_community_router(runtime: Runtime, auth: WebAuth) -> APIRouter:
             raise HTTPException(status_code=409, detail="You've used all your invites.")
         code = await c.accounts.create_invite(by=p.user, days=cfg.invite_days)  # type: ignore[arg-type]
         return {"code": code, "expires_in_days": cfg.invite_days}  # shown once; stored hashed
+
+    async def own_unused(p: Principal) -> list[Any]:
+        me = p.user
+        assert me is not None
+        now = c.clock.now()
+        return [
+            i
+            for i in await c.db.invites.list(limit=500)
+            if i.created_by == me.id and i.used_by is None and i.expires_at > now
+        ]
+
+    @router.delete("/api/me/invites/{ref}")
+    async def revoke_invite(ref: str, request: Request, p: Person) -> dict[str, bool]:
+        """Cancel one of your unused invite codes; it stops working and its place comes back."""
+
+        json_only(request)
+        found = next(
+            (i for i in await own_unused(p) if len(ref) >= 8 and i.id.startswith(ref)), None
+        )
+        if found is None:
+            raise HTTPException(status_code=404, detail="No such unused invite.")
+        await c.db.invites.delete(found.id)
+        await c.audit.record("account.invite_revoked", actor=p.user.id if p.user else "")
+        return {"ok": True}
+
+    @router.post("/api/me/invites/revoke-unused")
+    async def revoke_unused(request: Request, p: Person) -> dict[str, int]:
+        json_only(request)
+        unused = await own_unused(p)
+        for i in unused:
+            await c.db.invites.delete(i.id)
+        await c.audit.record(
+            "account.invite_revoked", actor=p.user.id if p.user else "", count=len(unused)
+        )
+        return {"revoked": len(unused)}
 
     async def count(table: Any, *where: Any) -> int:
         async with c.db.engine.connect() as conn:
