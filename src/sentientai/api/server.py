@@ -302,6 +302,12 @@ def create_app(runtime: Runtime) -> FastAPI:
     async def tools(_: Operator) -> list[dict[str, Any]]:
         return c.registry.describe()
 
+    @app.get("/v1/tools/schemas")
+    async def tool_schemas(_: Operator) -> list[dict[str, Any]]:
+        """The tool definitions exactly as a conversation offers them to the model."""
+
+        return [t.to_openai() for t in c.registry.schemas(autonomous=False)]
+
     # -------------------------------------------------------------- safety
     @app.post("/v1/kill")
     async def kill(body: KillIn, who: Operator) -> dict[str, Any]:

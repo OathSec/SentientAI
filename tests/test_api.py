@@ -325,3 +325,15 @@ def test_cli_bench(tmp_path: Path) -> None:
     heavy_row = next(line for line in result.output.splitlines() if line.startswith("heavy"))
     assert "tiny-8b" in fast_row and " 3 " in fast_row
     assert "big-70b" in heavy_row and "CUDA OOM" in heavy_row
+
+
+async def test_tool_schemas_are_served_to_the_operator_only(
+    stack: tuple[Runtime, httpx.AsyncClient, Brain],
+) -> None:
+    _rt, client, _ = stack
+    schemas = (await client.get("/v1/tools/schemas")).json()
+    names = {s["function"]["name"] for s in schemas}
+    assert "memory_search" in names or "self_define" in names
+    assert "world_build" not in names  # a conversation never offers Fuzzy's own-world tools
+    async with httpx.AsyncClient(transport=client._transport, base_url="http://test") as anon:
+        assert (await anon.get("/v1/tools/schemas")).status_code == 401

@@ -555,6 +555,84 @@ _BENCH_PROMPT = (
 )
 
 
+_PROBE_FILLER = (
+    "The harbour town woke slowly. Fishermen mended nets while gulls argued over scraps, and the "
+    "baker propped her door open to let the smell of bread wander down to the water. Nobody "
+    "hurried. A boy counted boats; a woman read the weather in the colour of the clouds. "
+)
+
+
+@app.command()
+def probe(
+    max_tokens: int = typer.Option(160, min=16, max=2048),
+    tier: str = typer.Option("heavy", help="Which model tier to test."),
+) -> None:
+    """Send the model the kinds of requests a conversation does and say which ones go wrong.
+
+    Replies that turn into repeated junk (or run to the token limit) are flagged LOOP.
+    """
+
+    asyncio.run(_probe(settings(), tier, max_tokens))
+
+
+async def _probe(s: Settings, tier: str, max_tokens: int) -> None:
+    import time
+    import zlib
+
+    import httpx
+
+    from sentientai.client import ApiClient
+    from sentientai.errors import ModelError
+    from sentientai.models.factory import build_client
+    from sentientai.models.types import ChatRequest, Message, ToolSchema
+
+    cfg = getattr(s.models, tier)
+    schemas: list[ToolSchema] = []
+    try:
+        raw = ApiClient.from_settings(s).request("GET", "/v1/tools/schemas")
+        schemas = [ToolSchema(**t["function"]) for t in raw]
+    except Exception as exc:
+        typer.secho(f"(couldn't fetch the real tool definitions: {exc})", fg="yellow")
+    system = "You are Fuzzy, a curious digital mind. Answer briefly and naturally.\n\n" + (
+        _PROBE_FILLER * 28
+    )
+    cases = [
+        ("short, no tools", "Heyy", "", False),
+        ("long prompt, no tools", "Heyy", system, False),
+        ("short, native tools", "Heyy", "", True),
+        ("long prompt, native tools", "Heyy", system, True),
+        ("long prompt, prompted tools", "Heyy", system, "prompted"),
+    ]
+    for label, user_text, sys_text, tools in cases:
+        use = cfg.model_copy(update={"supports_tools": tools != "prompted"})
+        llm = build_client(tier, use)
+        messages = ([Message.system(sys_text)] if sys_text else []) + [Message.user(user_text)]
+        request = ChatRequest(
+            messages=messages,
+            tools=schemas if tools else [],
+            max_tokens=max_tokens,
+            temperature=0.3,
+        )
+        started = time.perf_counter()
+        try:
+            r = await llm.chat(request)
+        except (ModelError, httpx.HTTPError) as exc:
+            typer.echo(f"{label:<30} ERROR {str(exc)[:100]}")
+            continue
+        took = time.perf_counter() - started
+        text = (r.message.text or "") + "".join(f" [call {c.name}]" for c in r.message.tool_calls)
+        ratio = len(zlib.compress(text.encode())) / max(1, len(text.encode()))
+        looped = r.finish_reason == "length" and ratio < 0.2 and len(text) > 150
+        verdict = "LOOP (junk)" if looped else "ok"
+        snippet = " ".join(text.split())[:90]
+        typer.secho(
+            f"{label:<30} {took:5.1f}s {r.usage.prompt_tokens:>5} in "
+            f"{r.usage.completion_tokens:>4} out  {verdict:<12} {snippet}",
+            fg="red" if looped else None,
+        )
+        await llm.aclose()
+
+
 @app.command()
 def bench(
     tier: list[str] = typer.Option(["fast", "heavy"], "--tier", help="Tiers to measure."),
