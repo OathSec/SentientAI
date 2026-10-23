@@ -176,6 +176,13 @@ services:
       --host 0.0.0.0 --port 8000
       --n-gpu-layers 999 --ctx-size ${HEAVY_CTX_SIZE:-16384} --flash-attn ${FLASH_ATTN:-on}
       --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${HEAVY_PARALLEL:-1} ${LLAMA_EXTRA:-}
+    # llama.cpp's image checks port 8080 by default; these servers listen on 8000.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
 
   llm-fast:
     <<: *restart
@@ -194,6 +201,13 @@ services:
       --host 0.0.0.0 --port 8002
       --n-gpu-layers 999 --ctx-size ${FAST_CTX_SIZE:-16384} --flash-attn ${FLASH_ATTN:-on}
       --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${FAST_PARALLEL:-2}
+    # llama.cpp's image checks port 8080 by default; these servers listen on 8002.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
 
   # One bigger model across BOTH cards (profile `bigmodel`, instead of `models`' two servers):
   # for example a 14B at Q4_K_M (~9 GB), layer-split over the 2070 and the 1660 Ti. Both of
@@ -218,6 +232,13 @@ services:
       --n-gpu-layers 999 --split-mode layer --tensor-split ${BIG_SPLIT:-6,8}
       --ctx-size ${BIG_CTX_SIZE:-24576} --flash-attn ${FLASH_ATTN:-on}
       --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${FAST_PARALLEL:-2}
+    # llama.cpp's image checks port 8080 by default; these servers listen on 8000.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 600s
 
   # Image generation on demand (profile `images`): Stable Diffusion on the 1660 Ti, full
   # precision. Idle, it holds no GPU memory; for each picture Fuzzy pauses the model server on
@@ -253,3 +274,10 @@ services:
       -m /models/${EMBED_MODEL:-embed.gguf}
       --host 0.0.0.0 --port 8001
       --embedding --n-gpu-layers 0 --ctx-size 8192 --batch-size 2048 --ubatch-size 2048
+    # llama.cpp's image checks port 8080 by default; these servers listen on 8001.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s

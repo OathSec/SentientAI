@@ -193,6 +193,12 @@ class CognitiveAgent:
             except ModelError as exc:
                 outcome.status = TaskStatus.FAILED
                 outcome.error = f"model unavailable: {exc}"
+            except Exception as exc:
+                # Anything else (a storage hiccup, a bug in a tool) still ends the task properly,
+                # so the person waiting on a reply hears back and the task isn't left "running".
+                log.exception("task crashed")
+                outcome.status = TaskStatus.FAILED
+                outcome.error = f"something went wrong: {type(exc).__name__}: {exc}"[:500]
             await self._finish(task, outcome, guard, started)
             return outcome
 

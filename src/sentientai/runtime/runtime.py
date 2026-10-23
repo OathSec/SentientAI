@@ -151,10 +151,28 @@ class Runtime:
             scheduler = Scheduler(rt.schedules, self._submit_scheduled, c.db.state, clock=c.clock)
             self._spawn(scheduler.run(), "scheduler")
         for watch in rt.watchers:
+            watch = watch.model_copy(update={"path": self._watch_path(watch.path)})
+            with contextlib.suppress(OSError):  # somewhere to drop files from day one
+                watch.path.mkdir(parents=True, exist_ok=True)
             watcher = FolderWatcher(
                 watch, state=c.db.state, pipeline=c.pipeline, submit_task=self._submit_watched
             )
             self._spawn(watcher.run(), f"watcher:{watch.name}")
+
+    def _watch_path(self, path: Path) -> Path:
+        """A relative watcher path lives in Fuzzy's workspace, wherever that is mounted.
+
+        (In the container the working directory isn't the workspace, so ``./workspace/inbox``
+        pointed at a folder that doesn't exist there.)
+        """
+
+        if path.is_absolute():
+            return path
+        root = self.settings.safety.workspace_roots[0]
+        parts = [p for p in path.parts if p != "."]
+        if parts and parts[0] == "workspace":  # "./workspace/inbox" from the sample config
+            parts = parts[1:]
+        return root.joinpath(*parts)
 
     async def stop(self, reason: str = "shutdown", *, grace_s: float = 15.0) -> None:
         if self._stopped:
@@ -646,6 +664,13 @@ class Runtime:
                 await c.db.tasks.finish(task.id, TaskStatus.CANCELLED, error=reason)
             self._notify(task.id)
             raise
+        except Exception as exc:  # the agent settles its own errors; this is the last resort
+            log.exception("task failed outside the agent", extra={"task_id": task.id})
+            await c.db.tasks.finish(
+                task.id, TaskStatus.FAILED, error=f"{type(exc).__name__}: {exc}"
+            )
+            self._notify(task.id)
+            return None
         record = await c.db.tasks.get(task.id) or task
         record.status = outcome.status
         record.result = outcome.answer

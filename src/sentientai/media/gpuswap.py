@@ -95,9 +95,16 @@ class GpuSwap:
 
     async def _restart_later(self) -> None:
         await asyncio.sleep(self.grace_s)
-        async with self._lock:
-            if self._borrowed == 0:
+        # If Docker refuses or is briefly unreachable, keep trying: until the model server is
+        # back, Fuzzy's inner life runs on the other card and competes with conversations.
+        for attempt in range(6):
+            async with self._lock:
+                if self._borrowed:
+                    return  # another picture took the card; it restarts the server afterwards
                 await self._start()
+                if not self._stopped_by_us:
+                    return
+            await asyncio.sleep(min(300.0, 15.0 * 2**attempt))
 
     async def _start(self) -> None:
         log.info("restarting model server", extra={"container": self.container})

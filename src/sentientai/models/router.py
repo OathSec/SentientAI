@@ -115,7 +115,7 @@ class ModelRouter:
             return RouteDecision(
                 self._available(ModelTier.HEAVY), f"low confidence {confidence:.2f}"
             )
-        if fast is not None and tokens > int(fast.context_window * 0.85):
+        if fast is not None and self._overflows(fast, tokens, request):
             return RouteDecision(
                 self._available(ModelTier.HEAVY), "prompt exceeds fast context window"
             )
@@ -130,6 +130,23 @@ class ModelRouter:
         if tokens > self.config.complexity_token_threshold:
             return RouteDecision(self._available(ModelTier.HEAVY), "complex prompt")
         return RouteDecision(self._available(ModelTier.FAST), "default")
+
+    @staticmethod
+    def _overflows(client: LLMClient, tokens: int, request: ChatRequest) -> bool:
+        """The prompt plus the room asked for the answer won't fit the client's context.
+
+        (A server whose context fills up mid-answer stops there, and a half-written JSON answer
+        reads as nonsense.)"""
+
+        if tokens > int(client.context_window * 0.85):
+            return True
+        cap = getattr(getattr(client, "config", None), "max_output_tokens", None)
+        wanted = request.max_tokens or cap
+        if not isinstance(wanted, int):
+            return False
+        if isinstance(cap, int):
+            wanted = min(wanted, cap)
+        return tokens + wanted > client.context_window
 
     async def chat(
         self,
