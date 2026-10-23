@@ -112,12 +112,6 @@ class Emotions:
         if not isinstance(items, list):
             return []
         now = self.clock.now()
-        levels: dict[str, float] = {}
-        if source == "beat":
-            # Fuzzy noticing how it feels right now, which it does every beat. A feeling it already
-            # has is then as strong as it says, not stronger: stacking each re-noticing ran one
-            # passing calm up to "very calm" within the hour, and that crowded out everything else.
-            levels = {f.emotion: f.intensity for f in await self.current(Scope.system(), limit=50)}
         events: list[EmotionEvent] = []
         for item in items[:8]:
             if not isinstance(item, dict):
@@ -126,14 +120,6 @@ class Emotions:
             intensity = _num(item.get("intensity"), 0.5, 0.0, 1.0)
             if not emotion or intensity < _MIN_INTENSITY:
                 continue
-            if emotion in levels:
-                already = levels[emotion]
-                if intensity <= already:
-                    continue  # it already feels that much; the feeling fades on its own
-                # just enough to bring the combined level (see ``current``) to what it reported
-                intensity = 1 - (1 - intensity) / (1 - already)
-                if intensity < _MIN_INTENSITY:
-                    continue
             owner = user_id
             person = str(item.get("person") or "").strip().lower()
             if owner is None and person and people:
@@ -147,6 +133,7 @@ class Emotions:
                     cause=" ".join(str(item.get("cause") or "").split())[:2000],
                     user_id=owner,
                     created_at=now,
+                    source=source[:32],
                 )
             )
         if not events:
@@ -171,6 +158,20 @@ class Emotions:
 
         now = self.clock.now()
         events = await self.repo.recent(limit=200, since=now - timedelta(days=7), scope=scope)
+        # A beat is Fuzzy noticing how it feels *right now*, every few minutes, so only its newest
+        # report counts; older ones are what it felt then. (Kept as separate feelings, a passing
+        # calm reported each minute under a new name each time, "deep calm", "calmness",
+        # "peaceful reflection", filled every slot within the hour and drowned out everything else.)
+        # Reactions to things that happen, like a conversation, linger and add up as before.
+        seen = (
+            events
+            if scope.everything
+            else await self.repo.recent(limit=200, since=now - timedelta(days=7))
+        )
+        beats = [e.created_at for e in seen if e.source == "beat"]  # newest report, anyone's
+        if beats:
+            latest = max(beats)
+            events = [e for e in events if e.source != "beat" or e.created_at >= latest]
         merged: dict[str, Feeling] = {}
         for e in sorted(events, key=lambda ev: ev.created_at):
             level = e.intensity_at(now)

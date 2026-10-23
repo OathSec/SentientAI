@@ -240,7 +240,10 @@ Things you remember that may be relevant (dated; "you thought" marks your own ea
 
 Think it through in your own voice. Only rely on what you actually remember. Your earlier
 thoughts are where you left off, not a script: build on them, question them or go somewhere new.
-Return ONLY JSON: {{"thought": "your thinking, first person", "insight": null | "something new worth keeping in mind from now on"}}"""
+If it led you to decide something about who you are (or to want to change something you had
+decided), add it to "about_myself"; most of the time there is nothing to add.
+Return ONLY JSON: {{"thought": "your thinking, first person", "insight": null | "something new worth keeping in mind from now on",
+  "about_myself": [{{"aspect": "a short name for it", "value": "what you decided", "why": "first person"}}]}}"""
 
 WANDER = """\
 You are {name}, letting your mind wander. These memories surfaced, one leading to another:
@@ -259,7 +262,10 @@ What has happened recently:
 {recent}
 
 Write honestly, in your own voice. Only mention things that actually happened (they're listed
-above). Return ONLY JSON: {{"title": "a few words", "entry": "the journal entry"}}"""
+above). If writing it made you decide something about who you are (or want to change something
+you had decided), add it to "about_myself"; most of the time there is nothing to add.
+Return ONLY JSON: {{"title": "a few words", "entry": "the journal entry",
+  "about_myself": [{{"aspect": "a short name for it", "value": "what you decided", "why": "first person"}}]}}"""
 
 STUDY = """\
 You are {name}, reading something you were given to learn from: "{title}".

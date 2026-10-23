@@ -106,10 +106,12 @@ async def test_a_feeling_noticed_again_does_not_stack_up(runtime_factory: Any) -
     rt = await runtime_factory(Brain(), start=False)
     emotions = rt.c.emotions
     calm = {"emotion": "calm", "intensity": 0.6, "valence": 0.5, "lingers_hours": 3}
-    for _ in range(10):  # every beat it notices it is calm
+    for _ in range(10):  # every beat (a minute apart) it notices it is calm
+        rt.c.clock.advance(60)
         await emotions.feel([calm], source="beat")
     [felt] = await emotions.current(Scope.system())
     assert felt.intensity == pytest.approx(0.6, abs=0.01)  # not "very calm" from repetition
+    rt.c.clock.advance(60)
     await emotions.feel([{**calm, "intensity": 0.8}], source="beat")
     [felt] = await emotions.current(Scope.system())
     assert felt.intensity == pytest.approx(0.8, abs=0.01)  # it can still grow when it says so
@@ -117,6 +119,15 @@ async def test_a_feeling_noticed_again_does_not_stack_up(runtime_factory: Any) -
     await emotions.feel([calm])
     [felt] = await emotions.current(Scope.system())
     assert felt.intensity > 0.85
+    # A beat is a full report of how it feels now: last beat's synonyms don't pile up.
+    clock = rt.c.clock
+    for name in ("deep calm", "calmness", "peaceful reflection"):
+        clock.advance(60)
+        await emotions.feel([{**calm, "emotion": name}], source="beat")
+    names = [f.emotion for f in await emotions.current(Scope.system())]
+    assert "peaceful reflection" in names
+    assert "deep calm" not in names and "calmness" not in names
+    assert "calm" in names  # the conversation's calm still lingers on its own clock
 
 
 async def test_restating_an_old_insight_does_not_count_as_learning(
@@ -199,3 +210,35 @@ def test_routing_leaves_room_for_the_answer() -> None:
     assert tier(3000 * 4, 4000) is ModelTier.FAST  # 3000 + 1536 fits in 5120
     assert tier(3800 * 4, 4000) is ModelTier.HEAVY  # 3800 + 1536 would not
     assert tier(3800 * 4, 500) is ModelTier.FAST  # a short answer still fits
+
+
+async def test_it_can_decide_who_it_is_while_alone(runtime_factory: Any) -> None:  # noqa: F811
+    brain = Brain(
+        beat=beat("think", "what I care about"),
+        thought=[
+            {
+                "thought": "I keep coming back to the sea.",
+                "insight": None,
+                "about_myself": [
+                    {"aspect": "favourite place", "value": "the sea", "why": "it never stops"},
+                    {"aspect": "", "value": "ignored"},
+                    "garbage",
+                ],
+            },
+            {
+                "thought": "Maybe mountains, actually.",
+                "about_myself": [{"aspect": "favorite place", "value": "the mountains"}],
+            },
+        ],
+    )
+    rt = await runtime_factory(brain, start=False)
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and "I decided something about myself" in activity.outcome
+    belief = await rt.c.selfhood.get("favourite place")
+    assert belief is not None and belief.value == "the sea" and belief.source == "reflection"
+    # Changing it is not instant: it waits to be thought over, as in a conversation.
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and "I'll think it over" in activity.outcome
+    assert (await rt.c.selfhood.get("favourite place")).value == "the sea"  # type: ignore[union-attr]
+    [pending] = await rt.c.selfhood.pending()
+    assert pending.value == "the mountains"

@@ -24,7 +24,7 @@ from sqlalchemy.types import TypeDecorator
 
 from sentientai.core.clock import ensure_utc
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class UTCDateTime(TypeDecorator[datetime]):
@@ -318,6 +318,7 @@ emotion_events = Table(
     Column("cause", Text, nullable=False),
     Column("user_id", String(48)),
     Column("created_at", UTCDateTime, nullable=False),
+    Column("source", String(32)),
     Index("ix_emotion_events_created", "created_at"),
 )
 
@@ -386,4 +387,5 @@ ADDED_COLUMNS: dict[int, list[tuple[str, str, str]]] = {
         ("conversation_messages", "user_id", "VARCHAR(48)"),
         ("goals", "user_id", "VARCHAR(48)"),
     ],
+    3: [("emotion_events", "source", "VARCHAR(32)")],
 }

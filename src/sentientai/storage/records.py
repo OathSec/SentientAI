@@ -414,6 +414,9 @@ class EmotionEvent(_Record):
     cause: str
     user_id: str | None = None  # about this person: private to them
     created_at: datetime = Field(default_factory=utcnow)
+    # "beat" = noticed in a beat (a complete report of how it feels right now); anything else
+    # (or None, from before this was recorded) is a reaction to something that happened.
+    source: str | None = None
 
     def intensity_at(self, now: datetime) -> float:
         age = max(0.0, (now - self.created_at).total_seconds())

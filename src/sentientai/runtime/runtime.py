@@ -750,7 +750,7 @@ class Runtime:
                     note=f"{outcome.status.value}: {(outcome.answer or outcome.error or '')[:200]}",
                 )
 
-    async def _pursue_goal(self, goal_id: str) -> None:
+    async def _pursue_goal(self, goal_id: str, *, metadata: dict[str, Any] | None = None) -> None:
         goal = await self.c.db.goals.get(goal_id)
         if goal is None:
             return
@@ -763,6 +763,7 @@ class Runtime:
             source=TaskSource.INTRINSIC,
             priority=3,
             goal_id=goal.id,
+            metadata=metadata,
         )
 
     async def _live(self) -> None:

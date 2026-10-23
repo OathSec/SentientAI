@@ -139,8 +139,12 @@ def _recent_lines(recent: list[ActivityRecord], groups: int = 8) -> str:
             else f"{len(run)} times in a row, {run[-1].started_at:%H:%M} to {a.started_at:%H:%M}"
         )
         lines.append(
-            f"- {when} {a.kind}: {a.intent[:240]}"
-            + (f" -> {'last time: ' if len(run) > 1 else ''}{a.outcome[:360]}" if a.outcome else "")
+            f"- {when} {a.kind}: {_text(a.intent, 240)}"
+            + (
+                f" -> {'last time: ' if len(run) > 1 else ''}{_text(a.outcome, 360)}"
+                if a.outcome
+                else ""
+            )
         )
         i += len(run)
     return "\n".join(lines)
@@ -253,7 +257,7 @@ class Agency:
         )
         # Set by the runtime: start a background task / work on a goal.
         self.submit_task: Callable[..., Awaitable[Any]] | None = None
-        self.pursue_goal: Callable[[str], Awaitable[None]] | None = None
+        self.pursue_goal: Callable[..., Awaitable[None]] | None = None
         # Set by the runtime: what it's working on in the background, if anything.
         self.current_project: Callable[[], str | None] | None = None
         bus.subscribe("ingest.completed", self._on_ingest)
@@ -636,6 +640,37 @@ class Agency:
         )
         return record.access_count == 0
 
+    async def _about_self(self, data: dict[str, Any]) -> list[str]:
+        """What it decided about itself while thinking alone.
+
+        Goes through the same door as in a conversation: an aspect it hasn't decided yet is
+        settled (within the daily limit); a change to one it has is only noted, to be thought
+        over properly later (``reconsider``)."""
+
+        items = data.get("about_myself")
+        if not isinstance(items, list):
+            return []
+        shared = await self.redactor.shared()  # its beliefs are shown in everyone's conversations
+        notes: list[str] = []
+        for item in items[:2]:
+            if not isinstance(item, dict):
+                continue
+            aspect = _text(item.get("aspect"), 80)
+            value = shared(_text(item.get("value"), 300))
+            if not aspect or not value:
+                continue
+            try:
+                change = await self.selfhood.consider(
+                    aspect, value, shared(_text(item.get("why"), 1000)), source="reflection"
+                )
+            except ValueError:
+                continue
+            if change.status == "defined":
+                notes.append(f"I decided something about myself: {aspect}: {value}.")
+            elif change.status == "considering":
+                notes.append(f"I might change my {aspect} to {value}; I'll think it over.")
+        return notes
+
     def _mood(self) -> str:
         return self.emotions.mood or "calm"
 
@@ -661,6 +696,7 @@ class Agency:
         )
         if new_insight:  # restating something it already knew satisfies no curiosity
             self.emotions.affect.on_learning(0.5)
+        selfhood = await self._about_self(data)
         await self.bus.publish(
             "mind.thought",
             thought=thought,
@@ -668,7 +704,7 @@ class Agency:
         )
         if choice.person is None:  # the world page is public
             await self.world.set_action("thinking", thought)
-        return thought + (f"\nInsight: {insight}" if insight else "")
+        return "\n".join([thought + (f"\nInsight: {insight}" if insight else ""), *selfhood])
 
     async def _do_wander(
         self, choice: Choice, activity: ActivityRecord, signals: BodySignals
@@ -732,6 +768,7 @@ class Agency:
         entry = _prose(data.get("entry"))
         if not entry:
             return "I sat down to write but nothing came."
+        selfhood = await self._about_self(data)
         await self._keep(
             f"Journal, {self.clock.now():%Y-%m-%d}: {title}\n{entry}",
             MemoryKind.REFLECTION,
@@ -739,7 +776,7 @@ class Agency:
             person=None,
             journal=True,
         )
-        return f"{title}\n{entry}"
+        return "\n".join([f"{title}\n{entry}", *selfhood])
 
     async def _do_study(
         self, choice: Choice, activity: ActivityRecord, signals: BodySignals
@@ -1071,8 +1108,16 @@ class Agency:
         if goal is None:
             return "I have no goals to work on."
         activity.detail["goal_id"] = goal.id
-        await self.pursue_goal(goal.id)
-        return f"Working on: {goal.description}"
+        # Linked to this activity, so how the work went is added to it when it finishes.
+        await self.pursue_goal(
+            goal.id,
+            metadata={
+                "activity_id": activity.id,
+                "activity_kind": choice.kind,
+                "activity_intent": choice.intent,
+            },
+        )
+        return f"Started working on: {goal.description}. How it goes will be added here."
 
     async def _do_new_goal(
         self, choice: Choice, activity: ActivityRecord, signals: BodySignals
