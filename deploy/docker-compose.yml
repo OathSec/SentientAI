@@ -234,7 +234,7 @@ services:
       --host 0.0.0.0 --port 8000
       --n-gpu-layers 999 --split-mode layer --tensor-split ${BIG_SPLIT:-6,8}
       --ctx-size ${BIG_CTX_SIZE:-24576} --flash-attn ${FLASH_ATTN:-on}
-      --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${FAST_PARALLEL:-2}
+      --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${FAST_PARALLEL:-2} ${LLAMA_EXTRA:-}
     # llama.cpp's image checks port 8080 by default; these servers listen on 8000.
     healthcheck:
       test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8000/health"]
