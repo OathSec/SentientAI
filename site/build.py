@@ -82,14 +82,21 @@ def card(title: str, text: str) -> str:
 
 LIVE = """
 <section class="wrap block" id="live" hidden>
-  <h2>Fuzzy, live</h2>
-  <p class="muted" id="live-doing">Checking in on Fuzzy…</p>
-  <div id="live-tiles" class="tiles"></div>
-  <div class="two">
-    <div><h3>Top contributors</h3><ol id="live-board" class="leaders"></ol>
-    <p class="small muted">Ranked by GPU time lent to Fuzzy. <a href="/worker/">Join the board</a>.</p></div>
-    <p class="small muted" id="live-note"></p>
+  <div class="livehead"><h2>Fuzzy, live</h2><span class="stamp muted" id="live-doing">Checking in on Fuzzy…</span></div>
+  <div class="panels">
+    <div class="panel">
+      <h3>Fuzzy's life so far</h3>
+      <div id="live-life" class="tiles"></div>
+      <h3 class="gap">Computers lending power</h3>
+      <div id="live-power" class="tiles"></div>
+    </div>
+    <div class="panel">
+      <h3>Top contributors</h3>
+      <ol id="live-board" class="board"></ol>
+      <p class="small muted">Ranked by GPU time lent to Fuzzy. <a href="/worker/">Join the board</a>.</p>
+    </div>
   </div>
+  <p class="small muted" id="live-note"></p>
 </section>
 """
 
@@ -243,9 +250,9 @@ def worker_body() -> str:
         data = LINUX.read_bytes()
         others += (
             '<div class="card"><h3>Linux</h3><p>64-bit, any recent distribution with a desktop. '
-            'After downloading: <code>chmod +x FuzzyWorker-linux &amp;&amp; ./FuzzyWorker-linux</code>. '
+            'After downloading: <code>chmod +x FuzzyWorker-linux.bin &amp;&amp; ./FuzzyWorker-linux.bin</code>. '
             'Installing Ollama needs one terminal command (the program tells you which).</p>'
-            '<p><a class="btn small" href="/downloads/FuzzyWorker-linux" download>Download for Linux</a></p>'
+            '<p><a class="btn small" href="/downloads/FuzzyWorker-linux.bin" download>Download for Linux</a></p>'
             f'<p class="small muted">{len(data) / 1_048_576:.0f} MB · SHA-256: <code class="hash">{hashlib.sha256(data).hexdigest()}</code></p></div>'
         )
     others += (
@@ -365,7 +372,7 @@ def main() -> None:
     if EXE and EXE.is_file():
         shutil.copy(EXE, OUT / "downloads" / "FuzzyWorker.exe")
     if LINUX and LINUX.is_file():
-        shutil.copy(LINUX, OUT / "downloads" / "FuzzyWorker-linux")
+        shutil.copy(LINUX, OUT / "downloads" / "FuzzyWorker-linux.bin")
     print("built", sum(1 for _ in OUT.rglob("*") if _.is_file()), "files")
 
 

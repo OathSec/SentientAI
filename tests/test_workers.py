@@ -610,3 +610,16 @@ async def test_the_public_numbers_are_safe_to_show_and_need_no_login(
     assert data["leaders"] == [{"name": "Alex", "jobs": 1, "hours": 1.0}]
     assert data["fuzzy"]["memories"] >= 1 and data["fuzzy"]["people"] == 1
     assert "private thing" not in reply.text  # counts only, never content
+
+
+async def test_pages_ask_for_versioned_scripts_so_nobody_gets_a_stale_copy(
+    web_factory: Any,  # noqa: F811
+) -> None:
+    import re
+
+    web = await web_factory()
+    page = (await web.client().get("/compute")).text
+    assert re.search(r'src="/static/compute\.js\?v=[0-9a-f]{10}"', page)
+    assert re.search(r'href="/static/style\.css\?v=[0-9a-f]{10}"', page)
+    asset = await web.client().get("/static/app.js")
+    assert asset.headers["cache-control"] == "no-cache"

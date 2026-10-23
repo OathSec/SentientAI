@@ -76,6 +76,10 @@ class SecurityHeaders:
                 add("cross-origin-resource-policy", "same-origin")
                 if path.startswith("/api/") or path.startswith("/v1/"):
                     add("cache-control", "no-store")
+                elif path.startswith("/static/"):
+                    add(
+                        "cache-control", "no-cache"
+                    )  # revalidate (cheap 304) instead of 4 hours stale
                 if self.hsts:
                     add("strict-transport-security", "max-age=31536000; includeSubDomains")
                 message["headers"] = headers

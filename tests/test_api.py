@@ -56,7 +56,7 @@ async def test_auth_and_probes(stack: tuple[Runtime, httpx.AsyncClient, Brain]) 
     metrics = await client.get("/metrics")
     assert "sentient_affect" in metrics.text
     page = await client.get("/")
-    assert page.status_code == 200 and '<script src="/static/chat.js">' in page.text
+    assert page.status_code == 200 and '<script src="/static/chat.js' in page.text
     assert "<script>" not in page.text  # the CSP forbids inline scripts, so there are none
     assert "default-src 'none'" in page.headers["content-security-policy"]
     assert page.headers["x-frame-options"] == "DENY"

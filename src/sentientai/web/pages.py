@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -22,14 +24,31 @@ PAGES = {
 }
 
 
+def asset_version() -> str:
+    """Changes whenever a script or style changes, so browsers and Cloudflare never serve an
+    old copy next to a new page."""
+
+    digest = hashlib.sha1(usedforsecurity=False)
+    for f in sorted((ROOT / "static").glob("*")):
+        if f.is_file():
+            digest.update(f"{f.name}{f.stat().st_size}{f.stat().st_mtime_ns}".encode())
+    return digest.hexdigest()[:10]
+
+
 def mount_pages(app: FastAPI) -> None:
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
     def page(filename: str) -> object:
         path = ROOT / "pages" / filename
+        version = asset_version()
+        html = re.sub(
+            r'((?:src|href)="/static/[\w.\-]+\.(?:js|css))"',
+            lambda m: f'{m.group(1)}?v={version}"',
+            path.read_text(encoding="utf-8"),
+        )
 
         async def serve() -> Response:
-            return FileResponse(path, media_type="text/html", headers={"Cache-Control": "no-cache"})
+            return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
         return serve
 
