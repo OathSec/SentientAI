@@ -510,4 +510,4 @@ async def test_the_self_check_knows_when_nothing_was_made(runtime_factory: Any) 
     await rt.chat("s1", "draw me a sunset", timeout=10)
     [check] = [p for p in prompts if p.startswith("Check a reply")]
     assert "no tools were used for this reply, so nothing was made or done" in check
-    assert "something Fuzzy says it made" in check
+    assert "says it made, sent, saved or is doing right now" in check
