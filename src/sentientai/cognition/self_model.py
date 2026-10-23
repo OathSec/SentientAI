@@ -73,7 +73,9 @@ class SelfModel(BaseModel):
             self.limitations.append(text)
             del self.limitations[: max(0, len(self.limitations) - max_items)]
 
-    def render_identity(self, tools: list[str] | None = None) -> str:
+    def render_identity(
+        self, tools: list[str] | None = None, *, missing: list[str] | None = None
+    ) -> str:
         limits = "\n".join(f"- {v}" for v in self.limitations)
         names = self.capabilities if tools is None else tools
         caps = ", ".join(names) if names else "conversation only"
@@ -82,7 +84,13 @@ class SelfModel(BaseModel):
             text += "\n\nThe people who run you asked this of you:\n" + "\n".join(
                 f"- {c}" for c in self.commitments
             )
-        return f"{text}\n\nWhat you can do (tools): {caps}\nHow you work:\n{limits}"
+        cannot = ""
+        if missing:
+            cannot = (
+                "\nWhat you can't do right now (if asked, say so plainly; never pretend or "
+                "describe something you didn't make):\n" + "\n".join(f"- {m}" for m in missing)
+            )
+        return f"{text}\n\nWhat you can do (tools): {caps}{cannot}\nHow you work:\n{limits}"
 
     def render_continuity(self, now: datetime) -> str:
         if self.first_boot_at is None or self.boot_count <= 1:

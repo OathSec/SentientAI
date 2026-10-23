@@ -79,6 +79,8 @@ class Tool(ABC, Generic[A]):
     tags: tuple[str, ...] = ()
     # Only Fuzzy's own initiative may use this tool, never a conversation (not even an admin's).
     autonomous_only: bool = False
+    # What Fuzzy is told it can't do while this tool is unavailable (so it says so, not pretends).
+    unavailable_note: str = ""
 
     def available(self) -> bool:
         """False when the tool can't work right now (e.g. no image server): it isn't offered."""
@@ -126,6 +128,15 @@ class ToolRegistry:
 
     def tools(self) -> list[Tool[Any]]:
         return [self._tools[n] for n in self.names]
+
+    def unavailable_notes(self) -> list[str]:
+        """Things Fuzzy can't do right now because a tool isn't set up."""
+
+        return [
+            t.unavailable_note
+            for t in self._tools.values()
+            if t.unavailable_note and not t.available()
+        ]
 
     def schemas(
         self,

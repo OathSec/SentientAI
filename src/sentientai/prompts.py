@@ -322,8 +322,9 @@ The reply:
 {reply}
 
 List each claim in the reply about (a) past events or earlier conversations, (b) what the person
-said, did, or likes, or (c) {name}'s own history, identity or preferences, that the knowledge above
-does not support or contradicts. General knowledge, opinions, feelings and plans are fine.
+said, did, or likes, (c) {name}'s own history, identity or preferences, or (d) something {name}
+says it made, sent, saved or is doing right now (an image, a file, a build), that the knowledge
+and tool results above do not support or contradict. General knowledge, opinions, feelings and plans are fine.
 Also list any new decision {name} makes about itself in this reply that isn't in its decisions
 yet (for example choosing a favourite colour), as aspect/value pairs.
 

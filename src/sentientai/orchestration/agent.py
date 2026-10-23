@@ -259,7 +259,9 @@ class CognitiveAgent:
         messages = self.builder.build(
             FramingInputs(
                 goal=task.goal,
-                identity=mind.self_model.render_identity(tool_names),
+                identity=mind.self_model.render_identity(
+                    tool_names, missing=self.registry.unavailable_notes()
+                ),
                 continuity=redact(mind.self_model.render_continuity(now)),
                 inner_state=perspective.feelings if perspective else mind.affect.describe(),
                 awareness=redact(mind.workspace.render()),
@@ -363,10 +365,14 @@ class CognitiveAgent:
                 + "\n".join(f"{t.role}: {t.content[:800]}" for t in dialogue)
             )
         tool_output = [m for m in outcome.transcript if m.role is Role.TOOL][-6:]
-        if tool_output:
-            parts.append(
-                "## Tool results\n" + "\n".join(f"[{m.name}] {m.text[:1500]}" for m in tool_output)
+        parts.append(
+            "## Tool results\n"
+            + (
+                "\n".join(f"[{m.name}] {m.text[:1500]}" for m in tool_output)
+                if tool_output
+                else "- none: no tools were used for this reply, so nothing was made or done"
             )
+        )
         result = await self.grounding.check(
             name=self.mind.self_model.name,
             message=task.goal,

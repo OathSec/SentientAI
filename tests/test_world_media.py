@@ -483,3 +483,31 @@ async def test_apply_expand_and_walk_actions(sqlite_db: Database, tmp_path: Path
     world, _ = make_world(sqlite_db, tmp_path, size=40, max_size=100)
     assert "from 40 m to 60 m" in await world.apply({"action": "expand", "size": 60})
     assert "walked to" in await world.apply({"action": "walk", "x": 25, "z": 25})
+
+
+async def test_fuzzy_is_told_plainly_what_it_cannot_do(runtime_factory: Any) -> None:  # noqa: F811
+    brain = Brain(["I can't make pictures yet: there's no image generator set up here."])
+    rt = await runtime_factory(brain)  # image generation is disabled in tests
+    await rt.chat("s1", "can you create an image for me", timeout=10)
+    system = brain.agent_requests[0].messages[0].text
+    assert "What you can't do right now" in system
+    assert "make pictures or images of any kind" in system
+    tools = {t.name for t in brain.agent_requests[0].tools}
+    assert "image_generate" not in tools
+
+
+async def test_the_self_check_knows_when_nothing_was_made(runtime_factory: Any) -> None:  # noqa: F811
+    brain = Brain(["Here's your picture of a sunset!"])
+    rt = await runtime_factory(brain)
+    prompts: list[str] = []
+    original = rt.c.router.chat
+
+    async def spy(request: Any, **kwargs: Any) -> Any:
+        prompts.append(request.messages[-1].text)
+        return await original(request, **kwargs)
+
+    rt.c.router.chat = spy
+    await rt.chat("s1", "draw me a sunset", timeout=10)
+    [check] = [p for p in prompts if p.startswith("Check a reply")]
+    assert "no tools were used for this reply, so nothing was made or done" in check
+    assert "something Fuzzy says it made" in check

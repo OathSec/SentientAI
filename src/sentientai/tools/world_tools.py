@@ -232,6 +232,9 @@ class ImageGenerate(Tool[ImageArgs]):
     args_model = ImageArgs
     timeout_s = 600.0
     tags = ("media",)
+    unavailable_note = (
+        "make pictures or images of any kind: no image generator is set up on this server yet"
+    )
 
     def __init__(self, images: ImageService, quotas: Quotas) -> None:
         self.images = images
