@@ -33,7 +33,7 @@ from sentientai.storage.records import RelationshipRecord, UserRecord
 
 # One conversation can move affinity or trust by at most this much: opinions change
 # over many interactions, not in one exchange (and one person can't game it quickly).
-MAX_STEP = 0.15
+MAX_STEP = 0.3
 NEW_VISIT_GAP_S = 30 * 60  # messages closer together than this are the same visit
 
 
