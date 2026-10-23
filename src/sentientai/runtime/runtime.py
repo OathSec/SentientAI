@@ -771,6 +771,14 @@ class Runtime:
         c = self.c
         _, rest_s = await c.agency.beat()
         self._next_beat = c.clock.monotonic() + rest_s
+        c.agency.beats += 1
+        every = self.settings.mind.narrative_every_beats
+        if every and c.agency.beats % every == 0:
+            # The story it tells itself about who it is includes its time alone, not only tasks.
+            try:
+                await c.reflector.update_narrative((MemoryKind.EPISODE, MemoryKind.REFLECTION))
+            except Exception:
+                log.exception("life story update failed")
         await c.mind.save(c.db.state)
 
     async def _consolidate(self) -> None:

@@ -17,6 +17,7 @@ compartment. Text stored as shared memory has other people's names removed.
 
 from __future__ import annotations
 
+import random
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from sentientai import prompts
 from sentientai.cognition.emotions import Emotions
 from sentientai.cognition.goals import GoalManager
 from sentientai.cognition.interoception import BodySignals, Interoception
+from sentientai.cognition.outside import OutsideWorld
 from sentientai.cognition.privacy import Redactor
 from sentientai.cognition.projects import Project, ProjectBook
 from sentientai.cognition.self_model import SelfModel, humanize_duration
@@ -48,6 +50,7 @@ from sentientai.storage.records import (
     ActivityStatus,
     GoalOrigin,
     MemoryKind,
+    MemoryRecord,
     NoteRecord,
     Scope,
     TaskSource,
@@ -136,8 +139,8 @@ def _recent_lines(recent: list[ActivityRecord], groups: int = 8) -> str:
             else f"{len(run)} times in a row, {run[-1].started_at:%H:%M} to {a.started_at:%H:%M}"
         )
         lines.append(
-            f"- {when} {a.kind}: {a.intent[:400]}"
-            + (f" -> {'last time: ' if len(run) > 1 else ''}{a.outcome[:600]}" if a.outcome else "")
+            f"- {when} {a.kind}: {a.intent[:240]}"
+            + (f" -> {'last time: ' if len(run) > 1 else ''}{a.outcome[:360]}" if a.outcome else "")
         )
         i += len(run)
     return "\n".join(lines)
@@ -147,6 +150,38 @@ def _prose(value: Any, limit: int = 20_000) -> str:
     """Longer writing keeps its paragraphs; the limit is only a safety net, not a style."""
 
     return "\n".join(line.rstrip() for line in str(value or "").strip().splitlines())[:limit]
+
+
+def _words(text: str) -> set[str]:
+    return {
+        w for w in "".join(c if c.isalnum() else " " for c in text.casefold()).split() if len(w) > 2
+    }
+
+
+def distinct(texts: list[str], *, overlap: float = 0.6) -> list[str]:
+    """Drop near-copies (mostly the same words as one kept earlier), keeping order.
+
+    A small model that has thought the same thing twenty times would otherwise be shown twenty
+    copies of it, which is exactly the pull that keeps it there."""
+
+    kept: list[str] = []
+    seen: list[set[str]] = []
+    for text in texts:
+        words = _words(text)
+        if not words:
+            continue
+        if any(
+            len(words & other) / max(1, min(len(words), len(other))) >= overlap for other in seen
+        ):
+            continue
+        kept.append(text)
+        seen.append(words)
+    return kept
+
+
+def _dated(m: MemoryRecord, limit: int) -> str:
+    own = m.source == "inner_life" and m.kind in (MemoryKind.THOUGHT, MemoryKind.REFLECTION)
+    return f"- ({m.created_at:%Y-%m-%d %H:%M}{', you thought' if own else ''}) {m.content[:limit]}"
 
 
 class Unparsed(Exception):
@@ -189,6 +224,8 @@ class Agency:
         audit: AuditLog,
         bus: EventBus,
         clock: Clock | None = None,
+        outside: OutsideWorld | None = None,
+        rng: random.Random | None = None,
     ) -> None:
         self.settings = settings
         self.config = settings.mind
@@ -207,7 +244,10 @@ class Agency:
         self.audit = audit
         self.bus = bus
         self.clock = clock or SystemClock()
+        self.outside = outside or OutsideWorld(enabled=False)
+        self._rng = rng or random.Random()  # noqa: S311 - variety, not security
         self._happenings: deque[str] = deque(maxlen=30)
+        self.beats = 0  # beats since boot (the runtime refreshes the life story every so many)
         self.projects = ProjectBook(
             db.state, bus=bus, clock=self.clock, max_active=settings.mind.max_active_projects
         )
@@ -416,8 +456,19 @@ class Agency:
                 f"{recent[0].kind}: {recent[0].intent[:200]}"
             )
         feelings = await self.emotions.current(Scope.system())
+        # The order of the list is not a preference, but small models favour whatever comes
+        # first (it was "think": 597 of 600 choices). Shuffled, the position means nothing.
+        shown = list(options)
+        self._rng.shuffle(shown)
+        now = self.clock.now()
         prompt = prompts.LIVE_BEAT.format(
             name=self.name,
+            now=f"{now:%A %d %B %Y}, {now:%H:%M} UTC",
+            story=self.self_model.narrative or "- not written yet",
+            beliefs=SelfConcept.render(await self.selfhood.beliefs(), reasons=False),
+            on_mind=await self._on_mind() or "- nothing yet",
+            surfaced=await self._surfaced() or "- nothing in particular",
+            outside=await self.outside.glimpse() or "- nothing this time",
             feelings=self.emotions.render(feelings, everything=True),
             signals=signals.describe(),
             events="\n".join(self._happenings) or "- nothing in particular",
@@ -426,7 +477,7 @@ class Agency:
             goals=GoalManager.render(await self.goals.active()),
             projects=ProjectBook.render(await self.projects.active()),
             possessions=await self._possessions(),
-            options="\n".join(f"- {k}: {DESCRIPTIONS[k]}" for k in options),
+            options="\n".join(f"- {k}: {DESCRIPTIONS[k]}" for k in shown),
         )
         response = await self.router.chat(
             ChatRequest(
@@ -484,6 +535,30 @@ class Agency:
             thinking=thinking,
         )
 
+    async def _on_mind(self) -> str:
+        """Its latest thoughts, insights and questions, so one idea can lead to the next."""
+
+        recent = await self.memory.timeline(
+            [MemoryKind.REFLECTION, MemoryKind.THOUGHT], limit=24, scope=Scope()
+        )
+        lines = distinct([_dated(m, 260) for m in recent if m.source == "inner_life"])
+        return "\n".join(lines[:5])
+
+    async def _surfaced(self) -> str:
+        """A memory that comes back on its own, as memories do, from anything it has known."""
+
+        found = await self.db.memories.sample(
+            1,
+            kinds=[
+                MemoryKind.FACT,
+                MemoryKind.REFLECTION,
+                MemoryKind.DOCUMENT,
+                MemoryKind.EPISODE,
+                MemoryKind.SUMMARY,
+            ],
+        )
+        return _dated(found[0], 400)[2:] if found else ""
+
     async def _possessions(self) -> str:
         """What Fuzzy has made, so ideas that connect things (a painting on a wall it built,
         a project about something it read) can occur to it."""
@@ -540,14 +615,17 @@ class Agency:
         importance: float,
         person: UserRecord | None,
         **metadata: Any,
-    ) -> None:
-        """Store something Fuzzy produced: privately if it's about someone, else name-scrubbed."""
+    ) -> bool:
+        """Store something Fuzzy produced: privately if it's about someone, else name-scrubbed.
+
+        True if it was new; False if it was (nearly) something it already had, which then only
+        gets reinforced."""
 
         if not content.strip():
-            return
+            return False
         if person is None:
             content = (await self.redactor.shared())(content)
-        await self.memory.remember(
+        record = await self.memory.remember(
             content,
             kind,
             importance=importance,
@@ -556,6 +634,7 @@ class Agency:
             dedupe=True,
             metadata=metadata or None,
         )
+        return record.access_count == 0
 
     def _mood(self) -> str:
         return self.emotions.mood or "calm"
@@ -564,21 +643,23 @@ class Agency:
         self, choice: Choice, activity: ActivityRecord, signals: BodySignals
     ) -> str:
         scope = Scope.for_user(choice.person.id) if choice.person else Scope()
-        hits = await self.memory.recall(choice.intent, k=6, scope=scope, touch=False)
+        hits = await self.memory.recall(choice.intent, k=10, scope=scope, touch=False)
+        memories = distinct([_dated(h.record, 1200) for h in hits])[:6]
         data = await self._ask(
             prompts.THINK_THROUGH.format(
                 name=self.name,
                 intent=choice.intent,
                 mood=self._mood(),
-                memories="\n".join(f"- {h.record.content[:1500]}" for h in hits)
-                or "- nothing specific",
+                memories="\n".join(memories) or "- nothing specific",
             )
         )
         thought = _prose(data.get("thought"))
         insight = _prose(data.get("insight"), 4000)
         await self._keep(thought, MemoryKind.THOUGHT, importance=0.25, person=choice.person)
-        if insight:
-            await self._keep(insight, MemoryKind.REFLECTION, importance=0.6, person=choice.person)
+        new_insight = insight and await self._keep(
+            insight, MemoryKind.REFLECTION, importance=0.6, person=choice.person
+        )
+        if new_insight:  # restating something it already knew satisfies no curiosity
             self.emotions.affect.on_learning(0.5)
         await self.bus.publish(
             "mind.thought",
@@ -615,8 +696,10 @@ class Agency:
         insight = _prose(data.get("insight"), 4000)
         curious = _prose(data.get("curious_about"), 2000)
         await self._keep(thought, MemoryKind.THOUGHT, importance=0.2, person=None)
-        if insight:
-            await self._keep(insight, MemoryKind.REFLECTION, importance=0.55, person=None)
+        if insight and await self._keep(
+            insight, MemoryKind.REFLECTION, importance=0.55, person=None
+        ):
+            self.emotions.affect.on_learning(0.3)
         if curious:
             await self._keep(
                 f"I'm curious about: {curious}", MemoryKind.THOUGHT, importance=0.35, person=None

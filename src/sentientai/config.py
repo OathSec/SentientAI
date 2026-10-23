@@ -342,6 +342,18 @@ class MindConfig(BaseModel):
     max_active_projects: int = Field(
         default=5, ge=1, description="Long-running projects of its own it keeps going at once."
     )
+    outside_world: bool = Field(
+        default=True,
+        description="Each beat, show Fuzzy one random thing from the world outside (a random "
+        "encyclopedia summary) to notice or ignore. Needs web access (web.search_backend not "
+        "'disabled'). Without new input a small model's inner life repeats itself.",
+    )
+    narrative_every_beats: int = Field(
+        default=30,
+        ge=0,
+        description="Rewrite Fuzzy's autobiography from its own life every this many beats "
+        "(0 = only after tasks), so the story it tells itself includes its time alone.",
+    )
     activities: list[str] = Field(
         default_factory=lambda: [
             "think",

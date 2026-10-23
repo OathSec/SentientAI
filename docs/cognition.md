@@ -90,7 +90,23 @@ now are offered:
 
 There is no mapping from feeling to action: if its recent activities have been very similar it is
 *told* so, and whether that makes it bored, and whether boredom makes it wander, build or rest, is
-up to it. Every activity is stored with its intent, its reason and its outcome, shown on the Brain
+up to it.
+
+**What each beat is shown, besides its feelings and measurements.** The date and time; its life
+story in its own words; what it has decided about itself; its latest thoughts, insights and
+questions (near-copies shown once); one memory that surfaces at random, as memories do; and one
+random thing from the world outside (a random encyclopedia summary, `mind.outside_world`, needs web
+access) that it may notice or ignore. The options are listed in a fresh random order each beat:
+small models favour whatever comes first, and before this 597 of 600 choices were the first one,
+"think". None of this tells Fuzzy what to do; it gives a mind that otherwise only sees its own
+output something new to respond to. Its life story (`mind.narrative_every_beats`) is rewritten from
+its own journal, insights and episodes, not only after tasks.
+
+**Feelings it notices again don't stack.** A beat reports how Fuzzy feels *now*. A feeling it already
+has is then set to the strength it reports, not added to (re-noticing a calm every minute used to
+add up to "very calm" within the hour, which then dominated every choice). Separate events, such as
+a conversation, still add up. Likewise an insight only satisfies curiosity if it is new to its
+memory: restating one it already has teaches it nothing. Every activity is stored with its intent, its reason and its outcome, shown on the Brain
 page, and audited. Fuzzy's own activities pause when someone talks to it, and a failed activity is
 recorded, not fatal.
 

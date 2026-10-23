@@ -169,6 +169,8 @@ mind:
   beat_max_s: 3600            # longest rest it may choose
   prior_contact_gap_hours: 6  # starting guess for how often people visit; experience replaces it
   notes_per_person_per_day: 1 # notes it may leave for someone it misses (0 = never)
+  outside_world: true         # each beat, one random encyclopedia summary to notice or ignore (needs web access)
+  narrative_every_beats: 30   # rewrite its life story from its own life every this many beats (0 = only after tasks)
   max_active_projects: 5      # long-running projects of its own (each with a notebook) at once
   # activities: [think, wander, journal, study, research, free, create_art, build, walk, write_note,
   #              reconsider, pursue_goal, new_goal, rest]   # what it may choose from

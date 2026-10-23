@@ -216,8 +216,10 @@ class Reflector:
             await self.update_narrative()
         return result
 
-    async def update_narrative(self) -> str:
-        episodes = await self.memory.timeline(limit=8)
+    async def update_narrative(self, kinds: tuple[MemoryKind, ...] = (MemoryKind.EPISODE,)) -> str:
+        """Rewrite the autobiography from the newest memories of ``kinds`` (shared ones only)."""
+
+        episodes = await self.memory.timeline(kinds, limit=8)
         try:
             response = await self.router.chat(
                 ChatRequest(

@@ -112,6 +112,12 @@ class Emotions:
         if not isinstance(items, list):
             return []
         now = self.clock.now()
+        levels: dict[str, float] = {}
+        if source == "beat":
+            # Fuzzy noticing how it feels right now, which it does every beat. A feeling it already
+            # has is then as strong as it says, not stronger: stacking each re-noticing ran one
+            # passing calm up to "very calm" within the hour, and that crowded out everything else.
+            levels = {f.emotion: f.intensity for f in await self.current(Scope.system(), limit=50)}
         events: list[EmotionEvent] = []
         for item in items[:8]:
             if not isinstance(item, dict):
@@ -120,6 +126,14 @@ class Emotions:
             intensity = _num(item.get("intensity"), 0.5, 0.0, 1.0)
             if not emotion or intensity < _MIN_INTENSITY:
                 continue
+            if emotion in levels:
+                already = levels[emotion]
+                if intensity <= already:
+                    continue  # it already feels that much; the feeling fades on its own
+                # just enough to bring the combined level (see ``current``) to what it reported
+                intensity = 1 - (1 - intensity) / (1 - already)
+                if intensity < _MIN_INTENSITY:
+                    continue
             owner = user_id
             person = str(item.get("person") or "").strip().lower()
             if owner is None and person and people:

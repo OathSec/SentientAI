@@ -14,6 +14,7 @@ from sentientai.cognition.goals import GoalManager
 from sentientai.cognition.grounding import Grounding
 from sentientai.cognition.interoception import Interoception
 from sentientai.cognition.mind import Mind
+from sentientai.cognition.outside import OutsideWorld
 from sentientai.cognition.persona import Persona
 from sentientai.cognition.privacy import Redactor
 from sentientai.cognition.selfhood import SelfConcept
@@ -104,6 +105,7 @@ class Components:
             self.router.aclose,
             self.web.aclose,
             self.images.aclose,
+            self.agency.outside.aclose,
             self.db.close,
         ):
             try:
@@ -298,6 +300,9 @@ async def build_components(
         audit=audit,
         bus=bus,
         clock=clock,
+        outside=OutsideWorld(
+            enabled=settings.mind.outside_world and settings.web.search_backend != "disabled"
+        ),
     )
     reflector = Reflector(
         router, memory, mind, min_fact_confidence=settings.memory.min_fact_confidence
