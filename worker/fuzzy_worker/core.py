@@ -73,7 +73,14 @@ class Config:
 
 
 def config_path() -> Path:
-    base = os.environ.get("APPDATA") or str(Path.home() / ".config")
+    if sys.platform == "darwin":
+        base = str(Path.home() / "Library" / "Application Support")
+    else:  # Windows: %APPDATA%; Linux: $XDG_CONFIG_HOME or ~/.config
+        base = (
+            os.environ.get("APPDATA")
+            or os.environ.get("XDG_CONFIG_HOME")
+            or str(Path.home() / ".config")
+        )
     return Path(base) / "FuzzyWorker" / "config.json"
 
 
@@ -113,10 +120,34 @@ def server_ok(url: str) -> bool:
 
 # ------------------------------------------------------------------ this computer
 def idle_seconds() -> float:
-    """Seconds since the last keyboard or mouse input (Windows). Elsewhere: treated as idle."""
+    """Seconds since the last keyboard or mouse input. If it can't be measured (a Linux session
+    without xprintidle, Wayland), the computer is treated as idle rather than never working."""
 
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(
+                ["ioreg", "-c", "IOHIDSystem"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout
+            line = next(x for x in out.splitlines() if "HIDIdleTime" in x)
+            return int(line.split("=")[-1].strip()) / 1e9
+        except (OSError, StopIteration, ValueError, subprocess.SubprocessError):
+            return 1e9
     if sys.platform != "win32":
-        return 1e9
+        try:
+            out = subprocess.run(
+                ["xprintidle"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout
+            return int(out.strip()) / 1000.0
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return 1e9
 
     class LastInput(ctypes.Structure):
         _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
@@ -129,8 +160,31 @@ def idle_seconds() -> float:
 
 
 def gpu_info() -> dict[str, Any]:
-    """GPU name, memory and load from nvidia-smi, if there is one."""
+    """GPU name, memory and load from nvidia-smi, if there is one. On an Apple Silicon Mac the
+    graphics share the computer's memory; about two thirds of it is usable for a model."""
 
+    if sys.platform == "darwin":
+        try:
+            import platform
+
+            if platform.machine() == "arm64":
+                total = int(
+                    subprocess.run(
+                        ["sysctl", "-n", "hw.memsize"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        check=False,
+                    ).stdout.strip()
+                )
+                return {
+                    "gpu": "Apple Silicon",
+                    "gpu_memory_mb": int(total / 1_048_576 * 0.66),
+                    "gpu_percent": 0,
+                }
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        return {}
     try:
         out = subprocess.run(
             [

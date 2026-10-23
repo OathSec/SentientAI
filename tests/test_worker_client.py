@@ -322,3 +322,62 @@ def test_the_setup_for_the_processor_is_limited_to_its_share(
     assert setup.thread_count(50) == 6 and setup.thread_count(5) == 1
     assert setup.thread_count(100) == 12 and setup.thread_count(500) == 12
     assert "num_thread" not in setup.recommend(8151)[1]
+
+
+# --------------------------------------------------------------- Mac and Linux
+def test_settings_live_in_each_systems_usual_place(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fuzzy_worker import core
+
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/home/x/.cfg")
+    monkeypatch.setattr(core.sys, "platform", "linux")
+    assert core.config_path().as_posix() == "/home/x/.cfg/FuzzyWorker/config.json"
+    monkeypatch.setattr(core.sys, "platform", "darwin")
+    assert (
+        core.config_path()
+        .as_posix()
+        .endswith("Library/Application Support/FuzzyWorker/config.json")
+    )
+
+
+def test_an_apple_silicon_mac_counts_its_shared_memory(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fuzzy_worker import core, setup
+
+    class Done:
+        stdout = "17179869184\n"  # 16 GB
+
+    monkeypatch.setattr(core.sys, "platform", "darwin")
+    monkeypatch.setattr("platform.machine", lambda: "arm64")
+    monkeypatch.setattr(core.subprocess, "run", lambda *a, **k: Done())
+    info = core.gpu_info()
+    assert info["gpu"] == "Apple Silicon" and 10_000 < info["gpu_memory_mb"] < 11_000
+    assert setup.recommend(info["gpu_memory_mb"])[0] == "qwen3:8b"
+
+
+def test_linux_asks_for_the_one_command_that_needs_a_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fuzzy_worker import setup
+
+    monkeypatch.setattr(setup.sys, "platform", "linux")
+    with pytest.raises(setup.SetupError, match=r"install.sh"):
+        setup.install_ollama(httpx.Client(), lambda t, f: None)
+
+
+def test_start_at_login_is_set_up_the_way_each_system_does_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fuzzy_worker import setup
+
+    monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(setup.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(setup.sys, "executable", "/opt/FuzzyWorker")
+    monkeypatch.setattr(setup.sys, "platform", "linux")
+    setup.set_autostart(True)
+    entry = tmp_path / ".config" / "autostart" / "fuzzy-worker.desktop"
+    assert "Exec=/opt/FuzzyWorker" in entry.read_text()
+    setup.set_autostart(False)
+    assert not entry.exists()
+    monkeypatch.setattr(setup.sys, "platform", "darwin")
+    setup.set_autostart(True)
+    assert (tmp_path / "Library" / "LaunchAgents" / "site.fuzzy.worker.plist").is_file()

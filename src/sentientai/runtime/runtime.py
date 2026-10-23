@@ -79,6 +79,9 @@ class Runtime:
         # Short follow-up thinking (e.g. forming an opinion of someone after a chat). It never
         # holds up the next conversation, but stops with the kill switch and at shutdown.
         self._afterthoughts: set[asyncio.Task[Any]] = set()
+        # Chat tasks whose reply a live chat() call is still waiting to deliver. A reply finished
+        # by anyone else (a task recovered after a restart) is delivered by _deliver_if_missing.
+        self._awaiting: set[str] = set()
         self._appraisal_waits: dict[str, asyncio.Task[Any]] = {}  # per person, until it begins
         self._done: dict[str, asyncio.Event] = {}
         self._goal_last: dict[str, float] = {}
@@ -376,8 +379,12 @@ class Runtime:
             user_id=user_id,
             metadata=metadata or None,
         )
+        self._awaiting.add(task.id)
         try:
             final = await self.wait(task.id, timeout)
+        except BaseException:
+            self._awaiting.discard(task.id)  # nobody is waiting any more
+            raise
         finally:
             await c.world.set_action("standing")
         answer = (
@@ -414,6 +421,7 @@ class Runtime:
                 c.agency.note(f"You talked with {user.display_name}.")
                 if self.settings.mind.appraise_relationships:
                     self._appraise_when_quiet(user, session_id)
+        self._awaiting.discard(task.id)
         return ChatReply(
             task=final,
             answer=answer,
@@ -745,8 +753,44 @@ class Runtime:
         self._start_afterthought(self._after_task(task, outcome), f"reflect:{task.id}")
         return outcome
 
+    async def _deliver_if_missing(self, task: TaskRecord, outcome: TaskOutcome) -> None:
+        """A finished reply with nobody waiting for it still reaches the person.
+
+        When the server restarts while Fuzzy is writing a reply, the task is resumed and finished
+        at the next boot, but the call that would have stored the answer in the conversation died
+        with the old process: the person asked something and never saw an answer."""
+
+        c = self.c
+        if task.id in self._awaiting or not task.session_id:
+            return
+        recent = await c.db.conversations.recent(task.session_id, limit=60)
+        if any(m.role == "assistant" and m.metadata.get("task_id") == task.id for m in recent):
+            return
+        answer = outcome.answer or (
+            "Sorry, I was restarted while I was answering and lost my train of thought. "
+            "Could you ask me again?"
+        )
+        await c.db.conversations.insert(
+            ConversationMessage(
+                session_id=task.session_id,
+                user_id=task.user_id,
+                role="assistant",
+                content=answer,
+                metadata={"task_id": task.id, "media": outcome.media, "recovered": True},
+            )
+        )
+        await c.memory.add_turn(
+            task.session_id, "assistant", answer, task_id=task.id, user_id=task.user_id
+        )
+        log.info("delivered a reply that was finished after a restart", extra={"task_id": task.id})
+
     async def _after_task(self, task: TaskRecord, outcome: TaskOutcome) -> None:
         c = self.c
+        if task.kind == "chat":
+            try:
+                await self._deliver_if_missing(task, outcome)
+            except Exception:
+                log.exception("couldn't deliver a recovered reply", extra={"task_id": task.id})
         if self.settings.runtime.reflect_after_tasks and outcome.status is not TaskStatus.CANCELLED:
             try:
                 with log_context(task_id=task.id):

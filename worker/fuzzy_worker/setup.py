@@ -121,11 +121,19 @@ def keep_ollama_quiet(seconds: float = 25.0) -> None:
         time.sleep(1.0)
 
 
+MAC_APP = Path.home() / "Applications" / "Ollama.app"
+MAC_ZIP_URL = "https://ollama.com/download/Ollama-darwin.zip"
+
+
 def find_ollama() -> Path | None:
     local = os.environ.get("LOCALAPPDATA", "")
     for candidate in (
         Path(local) / "Programs" / "Ollama" / "ollama.exe",
         Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Ollama" / "ollama.exe",
+        MAC_APP / "Contents" / "Resources" / "ollama",
+        Path("/Applications/Ollama.app/Contents/Resources/ollama"),
+        Path("/usr/local/bin/ollama"),
+        Path("/usr/bin/ollama"),
     ):
         if candidate.is_file():
             return candidate
@@ -189,6 +197,14 @@ def signed_by_ollama(exe: Path) -> bool:
 def install_ollama(client: httpx.Client, report: Report) -> Path:
     """Download Ollama's installer over HTTPS, check its signature, run it quietly."""
 
+    if sys.platform == "darwin":
+        return _install_ollama_mac(client, report)
+    if sys.platform != "win32":
+        raise SetupError(
+            "Ollama needs to be installed once, and on Linux that needs your password. Open a "
+            "terminal and run:  curl -fsSL https://ollama.com/install.sh | sh   then press "
+            "'Set everything up' again."
+        )
     with tempfile.TemporaryDirectory(prefix="fuzzy-worker-") as tmp:
         exe = Path(tmp) / "OllamaSetup.exe"
         report("Downloading Ollama", 0.0)
@@ -220,6 +236,48 @@ def install_ollama(client: httpx.Client, report: Report) -> Path:
     found = find_ollama()
     if found is None:
         raise SetupError("Ollama installed but I can't find it. Restart and run setup again.")
+    return found
+
+
+def _install_ollama_mac(client: httpx.Client, report: Report) -> Path:
+    """Ollama's Mac app, unpacked into ~/Applications (no password needed), signature checked."""
+
+    import shutil
+    import zipfile
+
+    with tempfile.TemporaryDirectory(prefix="fuzzy-worker-") as tmp:
+        archive = Path(tmp) / "Ollama-darwin.zip"
+        report("Downloading Ollama", 0.0)
+        try:
+            with client.stream("GET", MAC_ZIP_URL, follow_redirects=True, timeout=60.0) as r:
+                r.raise_for_status()
+                total = int(r.headers.get("content-length") or 0)
+                done = 0
+                with archive.open("wb") as fh:
+                    for chunk in r.iter_bytes(1 << 20):
+                        fh.write(chunk)
+                        done += len(chunk)
+                        report("Downloading Ollama", done / total if total else None)
+        except httpx.HTTPError as exc:
+            raise SetupError(f"Couldn't download Ollama ({type(exc).__name__}).") from exc
+        report("Unpacking Ollama", None)
+        MAC_APP.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(MAC_APP, ignore_errors=True)
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(MAC_APP.parent)
+        report("Checking the app is genuine", None)
+        check = subprocess.run(
+            ["codesign", "--verify", "--deep", "--strict", str(MAC_APP)],
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+        if check.returncode != 0:
+            shutil.rmtree(MAC_APP, ignore_errors=True)
+            raise SetupError("The Ollama app's signature didn't check out, so I stopped.")
+    found = find_ollama()
+    if found is None:
+        raise SetupError("Ollama unpacked but I can't find it. Try again.")
     return found
 
 
@@ -378,7 +436,33 @@ def run_setup(
 def set_autostart(enabled: bool) -> None:
     """Start this program when Windows starts (per user, no admin rights)."""
 
-    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+    if not getattr(sys, "frozen", False):
+        return
+    if sys.platform == "darwin":
+        agent = Path.home() / "Library" / "LaunchAgents" / "site.fuzzy.worker.plist"
+        if enabled:
+            agent.parent.mkdir(parents=True, exist_ok=True)
+            agent.write_text(
+                '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
+                "<key>Label</key><string>site.fuzzy.worker</string>"
+                f"<key>ProgramArguments</key><array><string>{sys.executable}</string></array>"
+                "<key>RunAtLoad</key><true/></dict></plist>",
+                encoding="utf-8",
+            )
+        else:
+            agent.unlink(missing_ok=True)
+        return
+    if sys.platform != "win32":
+        entry = Path.home() / ".config" / "autostart" / "fuzzy-worker.desktop"
+        if enabled:
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.write_text(
+                "[Desktop Entry]\nType=Application\nName=Fuzzy Worker\n"
+                f"Exec={sys.executable}\nX-GNOME-Autostart-enabled=true\n",
+                encoding="utf-8",
+            )
+        else:
+            entry.unlink(missing_ok=True)
         return
     import winreg
 

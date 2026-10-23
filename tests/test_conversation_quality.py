@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -219,3 +220,38 @@ async def test_choosing_to_talk_can_be_switched_off(runtime_factory: Any) -> Non
     brain = Brain(["Sure."], engage={"choice": "decline", "say": "no"})
     rt = await runtime_factory(brain, mind={"choose_to_talk": False})
     assert (await rt.chat("s", "hi", timeout=10)).answer == "Sure."
+
+
+async def test_a_reply_finished_after_a_restart_still_reaches_the_person(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    from sentientai.storage.records import TaskSource
+
+    rt = await runtime_factory(Brain(["Sorry for the wait, here is your answer."]))
+    alex = await make_user(rt, "Alex")
+    # What a recovered task looks like: submitted by a chat() call that no longer exists.
+    task = await rt.submit(
+        "are you there?",
+        source=TaskSource.USER,
+        kind="chat",
+        session_id="user:alex",
+        user_id=alex.id,
+    )
+    await rt.wait(task.id, timeout=10)
+
+    async def delivered() -> bool:
+        return any(
+            m.role == "assistant" and m.metadata.get("task_id") == task.id
+            for m in await rt.c.db.conversations.recent("user:alex", limit=10)
+        )
+
+    await wait_for(delivered, timeout=10)
+    # and a normal chat() reply is stored exactly once (by chat(), not twice)
+    await rt.chat("user:alex", "thanks", user=alex, timeout=10)
+    await asyncio.sleep(0.3)
+    replies = [
+        m
+        for m in await rt.c.db.conversations.recent("user:alex", limit=10)
+        if m.role == "assistant"
+    ]
+    assert len(replies) == 2
