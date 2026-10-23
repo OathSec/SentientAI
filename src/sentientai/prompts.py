@@ -307,8 +307,10 @@ does not support or contradicts. General knowledge, opinions, feelings and plans
 Also list any new decision {name} makes about itself in this reply that isn't in its decisions
 yet (for example choosing a favourite colour), as aspect/value pairs.
 
-Return ONLY JSON:
-{{"unsupported": ["claim", ...], "new_self_decisions": [{{"aspect": "short_key", "value": "...", "reasoning": "..."}}]}}"""
+Return ONLY JSON with two lists. "unsupported" holds each such claim, quoted or paraphrased from
+the reply; "new_self_decisions" holds objects with "aspect", "value" and "reasoning". Most replies
+have nothing to list; then return exactly:
+{{"unsupported": [], "new_self_decisions": []}}"""
 
 REVISE_REPLY = """\
 Correct a reply {name} is about to send, so it no longer claims the things listed below ({name}

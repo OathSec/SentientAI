@@ -117,32 +117,120 @@
   let body = world.body;
 
   // ---------------------------------------------------------------- camera
-  const view = { azimuth: 0.6, polar: 0.95, distance: Math.max(8, Math.min(60, world.size * 0.55)), target: new THREE.Vector3(0, 0, 0), focus: null };
+  const view = { azimuth: 0.6, polar: 0.95, distance: Math.max(8, Math.min(60, world.size * 0.55)), target: new THREE.Vector3(0, 1, 0), focus: null };
+  const maxDistance = () => Math.max(60, world.size * 1.6);
   function updateCamera() {
-    const t = view.focus || (follow.checked ? new THREE.Vector3(shown.x, 1, shown.z) : view.target);
-    view.target.lerp(t, 0.08);
+    const t = view.focus || (follow.checked ? new THREE.Vector3(shown.x, 1, shown.z) : null);
+    if (t) view.target.lerp(t, 0.08);
     const sp = Math.sin(view.polar), cp = Math.cos(view.polar);
     camera.position.set(
       view.target.x + view.distance * sp * Math.sin(view.azimuth),
       view.target.y + view.distance * cp,
       view.target.z + view.distance * sp * Math.cos(view.azimuth));
     camera.lookAt(view.target);
+    camera.far = Math.max(500, world.size * 4, view.distance * 4);
+    camera.updateProjectionMatrix();
   }
   const follow = $("follow");
-  let drag = null, moved = 0;
-  canvas.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY }; moved = 0; canvas.setPointerCapture(e.pointerId); });
-  canvas.addEventListener("pointermove", (e) => {
-    if (!drag) return;
-    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-    drag = { x: e.clientX, y: e.clientY }; moved += Math.abs(dx) + Math.abs(dy);
-    view.azimuth -= dx * 0.006;
-    view.polar = Math.max(0.15, Math.min(1.5, view.polar - dy * 0.006));
+  follow.addEventListener("change", () => { if (follow.checked) view.focus = null; });
+
+  // Moving the view yourself (panning) stops following Fuzzy; tick "Follow" to go back to it.
+  function freeLook() { follow.checked = false; view.focus = null; }
+  function pan(right, forward) {
+    freeLook();
+    const s = Math.sin(view.azimuth), c = Math.cos(view.azimuth);
+    const limit = world.size / 2 + 10;
+    view.target.x = Math.max(-limit, Math.min(limit, view.target.x + right * c - forward * s));
+    view.target.z = Math.max(-limit, Math.min(limit, view.target.z - right * s - forward * c));
+  }
+  function zoom(factor) { view.distance = Math.max(1.5, Math.min(maxDistance(), view.distance * factor)); }
+
+  // Mouse: drag to look around, right-drag (or Shift+drag) to move. Touch: one finger looks,
+  // two fingers move and pinch to zoom. Dragging works from anywhere on the stage, including over
+  // the thought bubble, but not over the side panel.
+  const pointers = new Map();
+  let moved = 0, panning = false, pinch = 0;
+  stage.addEventListener("contextmenu", (e) => { if (!$("side").contains(e.target)) e.preventDefault(); });
+  stage.addEventListener("pointerdown", (e) => {
+    if ($("side").contains(e.target)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    moved = 0;
+    panning = e.button === 2 || e.shiftKey;
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinch = Math.hypot(a.x - b.x, a.y - b.y);
+    }
+    stage.setPointerCapture(e.pointerId);
   });
-  canvas.addEventListener("pointerup", (e) => { drag = null; if (moved < 5) pick(e); });
-  canvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    view.distance = Math.max(3, Math.min(world.size * 1.4, view.distance * (1 + Math.sign(e.deltaY) * 0.1)));
-  }, { passive: false });
+  stage.addEventListener("pointermove", (e) => {
+    const last = pointers.get(e.pointerId);
+    if (!last) return;
+    const dx = e.clientX - last.x, dy = e.clientY - last.y;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    moved += Math.abs(dx) + Math.abs(dy);
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const now = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch) zoom(pinch / Math.max(1, now));
+      pinch = now;
+      const scale = view.distance / 600;
+      pan(-dx * scale / 2, dy * scale / 2);
+      return;
+    }
+    if (panning) {
+      const scale = view.distance / 600;
+      pan(-dx * scale, dy * scale);
+    } else {
+      view.azimuth -= dx * 0.006;
+      view.polar = Math.max(0.08, Math.min(1.52, view.polar - dy * 0.006));
+    }
+  });
+  function release(e) {
+    const was = pointers.has(e.pointerId);
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = 0;
+    if (was && e.type === "pointerup" && moved < 5 && e.target === canvas) pick(e);
+  }
+  stage.addEventListener("pointerup", release);
+  stage.addEventListener("pointercancel", release);
+  canvas.addEventListener("wheel", (e) => { e.preventDefault(); zoom(1 + Math.sign(e.deltaY) * 0.1); }, { passive: false });
+  canvas.addEventListener("dblclick", (e) => {
+    // Fly to the spot on the ground that was double-clicked.
+    const r = canvas.getBoundingClientRect();
+    raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+    const hit = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit)) {
+      freeLook();
+      view.focus = new THREE.Vector3(hit.x, 1, hit.z);
+    }
+  });
+  // Keyboard: WASD / arrows move, Q/E turn, +/- zoom, F follows Fuzzy again.
+  const keys = new Set();
+  window.addEventListener("keydown", (e) => {
+    if (e.target.closest && e.target.closest("input, textarea, select")) return;
+    const k = e.key.toLowerCase();
+    if (k === "f") { follow.checked = true; view.focus = null; return; }
+    if (["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright", "+", "=", "-"].includes(k)) {
+      keys.add(k);
+      if (k.startsWith("arrow")) e.preventDefault();
+    }
+  });
+  window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+  window.addEventListener("blur", () => keys.clear());
+  function steer(dt) {
+    if (!keys.size) return;
+    const speed = Math.max(4, view.distance * 0.8) * dt;
+    let right = 0, forward = 0;
+    if (keys.has("w") || keys.has("arrowup")) forward += speed;
+    if (keys.has("s") || keys.has("arrowdown")) forward -= speed;
+    if (keys.has("d") || keys.has("arrowright")) right += speed;
+    if (keys.has("a") || keys.has("arrowleft")) right -= speed;
+    if (right || forward) pan(right, forward);
+    if (keys.has("q")) view.azimuth += 1.5 * dt;
+    if (keys.has("e")) view.azimuth -= 1.5 * dt;
+    if (keys.has("+") || keys.has("=")) zoom(1 - 1.2 * dt);
+    if (keys.has("-")) zoom(1 + 1.2 * dt);
+  }
 
   const raycaster = new THREE.Raycaster();
   function pick(e) {
@@ -210,6 +298,26 @@
   resize();
 
   const projected = new THREE.Vector3();
+  // The thought bubble follows Fuzzy's head, but smoothly and always fully on screen, so turning
+  // the view doesn't fling it about. It hides when Fuzzy is behind the camera or out of view.
+  const bubblePos = { x: null, y: null };
+  function placeBubble() {
+    const bubble = $("bubble");
+    if (bubble.classList.contains("hidden")) { bubblePos.x = null; return; }
+    projected.set(shown.x, 2.3, shown.z).project(camera);
+    const onScreen = projected.z < 1 && Math.abs(projected.x) <= 1.05 && Math.abs(projected.y) <= 1.05;
+    bubble.style.visibility = onScreen ? "visible" : "hidden";
+    if (!onScreen) { bubblePos.x = null; return; }
+    const W = stage.clientWidth, H = stage.clientHeight, bw = bubble.offsetWidth, bh = bubble.offsetHeight, pad = 8;
+    let x = ((projected.x + 1) / 2) * W, y = ((1 - projected.y) / 2) * H;
+    x = Math.max(bw / 2 + pad, Math.min(W - bw / 2 - pad, x));
+    y = Math.max(bh + pad, Math.min(H - pad, y));
+    if (bubblePos.x === null) { bubblePos.x = x; bubblePos.y = y; }
+    bubblePos.x += (x - bubblePos.x) * 0.3;
+    bubblePos.y += (y - bubblePos.y) * 0.3;
+    bubble.style.left = bubblePos.x.toFixed(1) + "px";
+    bubble.style.top = bubblePos.y.toFixed(1) + "px";
+  }
   let last = performance.now();
   function frame(now) {
     const dt = Math.min(0.1, (now - last) / 1000); last = now;
@@ -238,15 +346,9 @@
         if (f >= 1) entry.born = null;
       }
     }
+    steer(dt);
     updateCamera();
-    projected.set(shown.x, 2.3, shown.z).project(camera);
-    const bubble = $("bubble");
-    if (!bubble.classList.contains("hidden")) {
-      const visible = projected.z < 1;
-      bubble.style.visibility = visible ? "visible" : "hidden";
-      bubble.style.left = ((projected.x + 1) / 2) * stage.clientWidth + "px";
-      bubble.style.top = ((1 - projected.y) / 2) * stage.clientHeight + "px";
-    }
+    placeBubble();
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
   }

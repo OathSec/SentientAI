@@ -839,8 +839,8 @@ def test_a_corrected_reply_comes_back_without_the_instructions() -> None:
     from sentientai.cognition.grounding import corrected_reply
 
     echoed = (
-        "I'm doing well, thanks. I don't remember us talking about that.\n\n"
-        "Return only the rewritten reply."
+        "<reply>I'm doing well, thanks. I don't remember us talking about that.\n\n"
+        "Return only the rewritten reply.</reply>"
     )
     assert corrected_reply(echoed) == (
         "I'm doing well, thanks. I don't remember us talking about that."
@@ -848,3 +848,31 @@ def test_a_corrected_reply_comes_back_without_the_instructions() -> None:
     tagged = "Sure.\n<reply>\nI'm good! How about you?\n</reply>\nWrite the corrected reply"
     assert corrected_reply(tagged) == "I'm good! How about you?"
     assert corrected_reply("<reply>Just this, unclosed") == "Just this, unclosed"
+
+
+async def test_placeholder_claims_and_rambling_rewrites_never_reach_the_person(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    rambling = (
+        "Okay, I need to correct the reply. Let me check the problems again.\n* claim\n* ...\n"
+        "</think>\nOkay, I need to correct the reply."
+    )
+    brain = Brain(
+        ["Sure, here's what I can do."],
+        grounding={"unsupported": ["claim", "..."], "new_self_decisions": []},
+    )
+    rt = await runtime_factory(brain)
+    reply = await rt.chat("s1", "can you please generate me an image", timeout=10)
+    assert reply.answer == "Sure, here's what I can do."  # placeholders aren't problems
+    assert reply.task.metadata["grounding"]["revised"] is False
+
+    from sentientai.cognition.grounding import corrected_reply
+
+    assert corrected_reply(rambling) == ""  # no reply in it: the original is kept instead
+
+
+def test_reasoning_before_a_lone_closing_think_tag_is_not_shown() -> None:
+    from sentientai.core.jsonparse import strip_reasoning
+
+    visible, thoughts = strip_reasoning("Let me think about this...\n</think>\nHi there!")
+    assert visible == "Hi there!" and thoughts and "Let me think" in thoughts

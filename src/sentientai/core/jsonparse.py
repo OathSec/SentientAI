@@ -23,6 +23,13 @@ def strip_reasoning(text: str) -> tuple[str, str | None]:
 
     thoughts = [m.group(0)[7:-8].strip() for m in _THINK.finditer(text)]
     visible = _THINK.sub("", text)
+    # The chat template may open <think> inside the prompt, so the output starts mid-thought and
+    # only the closing tag appears: everything before it is reasoning.
+    lowered = visible.lower()
+    if "</think>" in lowered and "<think>" not in lowered[: lowered.index("</think>")]:
+        idx = lowered.index("</think>")
+        thoughts.append(visible[:idx].strip())
+        visible = visible[idx + len("</think>") :]
     # An unterminated <think> (truncated output) hides everything after it.
     if "<think>" in visible.lower():
         idx = visible.lower().index("<think>")

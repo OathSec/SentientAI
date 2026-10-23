@@ -119,7 +119,6 @@
       const doing = brain.body && brain.body.action && brain.body.action !== "standing" ? brain.body.action : "";
       $("mood").textContent = brain.paused ? name + " is paused right now."
         : [brain.mood ? name + " is feeling: " + brain.mood : "", doing ? "(" + doing + " in its world)" : ""].filter(Boolean).join(" ");
-      $("presence").className = "presence" + (brain.paused ? " off" : " on");
     } catch (e) { /* the brain page is optional here */ }
   }
 

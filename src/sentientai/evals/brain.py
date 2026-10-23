@@ -104,7 +104,7 @@ class Brain:
     def _scripted(self, name: str, request: ChatRequest) -> Message | str | Exception:
         self._count(name)
         if name == "revision":
-            return self.revision
+            return f"<reply>\n{self.revision}\n</reply>"
         script = self.scripts[name]
         if isinstance(script, list):
             script = script.pop(0) if len(script) > 1 else script[0]

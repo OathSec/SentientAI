@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 from sentientai import prompts
 from sentientai.cognition.selfhood import SelfConcept
-from sentientai.core.jsonparse import extract_object
+from sentientai.core.jsonparse import extract_object, strip_reasoning
 from sentientai.core.logging import get_logger
 from sentientai.errors import ModelError
 from sentientai.models.router import ModelRouter
@@ -48,12 +48,26 @@ _ECHOED_INSTRUCTIONS = re.compile(
 )
 
 
-def corrected_reply(text: str) -> str:
-    """The reply out of a revision, without any of the instructions echoed back."""
+_PLACEHOLDERS = {"claim", "claims", "...", "…", "none", "n/a", "null", "string"}
 
-    found = _REPLY_TAGS.findall(text)
-    body = found[-1] if found else text
-    body = _ECHOED_INSTRUCTIONS.sub("", body.replace("</reply>", "").replace("<reply>", ""))
+
+def _is_claim(text: str) -> bool:
+    cleaned = text.strip().strip("\"'").strip()
+    return cleaned.casefold() not in _PLACEHOLDERS and len(cleaned.split()) >= 3
+
+
+def corrected_reply(text: str) -> str:
+    """The reply out of a revision, or "" if the model didn't give one.
+
+    The revision is asked to put the reply between <reply> tags. Without them the output is
+    usually the model talking about the task, which must never be sent to the person.
+    """
+
+    visible, _ = strip_reasoning(text)
+    found = _REPLY_TAGS.findall(visible)
+    if not found:
+        return ""
+    body = _ECHOED_INSTRUCTIONS.sub("", found[-1].replace("</reply>", "").replace("<reply>", ""))
     return body.strip()
 
 
@@ -109,12 +123,16 @@ class Grounding:
         data = extract_object(response.message.text) or {}
         unsupported = data.get("unsupported")
         if isinstance(unsupported, list):
-            result.unsupported = [
-                " ".join(str(c).split())[:600] for c in unsupported if str(c).strip()
-            ][:8]
+            claims = (" ".join(str(c).split())[:600] for c in unsupported)
+            # A small model sometimes hands back placeholders ("claim", "...") instead of
+            # claims; those aren't problems with the reply and must not trigger a rewrite.
+            result.unsupported = [c for c in claims if _is_claim(c)][:8]
         decisions = data.get("new_self_decisions")
         for item in decisions if isinstance(decisions, list) else []:
             if not isinstance(item, dict) or not item.get("aspect") or not item.get("value"):
+                continue
+            value = str(item["value"]).strip()
+            if value.casefold() in _PLACEHOLDERS or str(item["aspect"]).strip() == "short_key":
                 continue
             try:
                 change = await self.selfhood.define(
@@ -155,6 +173,10 @@ class Grounding:
                 if text:
                     result.reply = text
                     result.revised = True
+                else:
+                    # A rewrite that didn't come back as a reply (it rambled about the task
+                    # instead) is worse than the original: keep what was going to be sent.
+                    log.warning("reply revision unusable; keeping the original reply")
             except ModelError as exc:
                 log.warning("reply revision failed", extra={"error": str(exc)})
         await self.audit.record(
