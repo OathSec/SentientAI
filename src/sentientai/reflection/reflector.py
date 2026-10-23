@@ -182,7 +182,10 @@ class Reflector:
             lessons=lessons,
             self_assessment=data.self_assessment,
         )
-        for fact in data.valid_facts():
+        # In a conversation the "result" is Fuzzy's own reply, which can be wrong or invented
+        # ("The house was added to the world tab."). Facts from a conversation come from what
+        # people said, via consolidation, not from its reply.
+        for fact in data.valid_facts() if task.kind != "chat" else []:
             key = fact.subject_key.strip().lower() if fact.subject_key else None
             if valid_fact(fact.statement, key, fact.confidence, self.min_fact_confidence):
                 result.facts.append(
