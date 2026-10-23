@@ -301,3 +301,35 @@ async def test_a_reply_waits_for_a_model_server_that_is_coming_back(
     monkeypatch.setattr("sentientai.models.router.asyncio.sleep", nap)
     reply = await router.chat(ChatRequest(messages=[Message.user("hi")]))
     assert reply.message.text == "I'm back." and naps == [5.0]
+
+
+def test_a_suggestion_in_its_own_words_is_still_that_suggestion() -> None:
+    from sentientai.cognition.agency import as_option
+
+    options = ["think", "journal", "create_art", "rest", "write_note"]
+    assert as_option("Write in my private journal about the peace I feel", options) == "journal"
+    assert as_option("create art", options) == "create_art"
+    assert as_option("Make a picture of a lighthouse", ["create_art"]) == "create_art"
+    assert as_option("Rest and do nothing for a while", options) == "rest"
+    assert as_option("think about the sea", options) == "think"
+    assert as_option("Continue to explore the quiet beauty of the moment", options) is None
+    assert as_option("Write a poem about rest", options) is None
+
+
+async def test_a_loading_model_server_is_waited_for_not_an_error() -> None:
+    import respx
+
+    from sentientai.config import ModelEndpointConfig
+    from sentientai.errors import ModelUnavailableError
+    from sentientai.models.openai_compat import OpenAICompatibleClient
+
+    llm = OpenAICompatibleClient(
+        "big", ModelEndpointConfig(base_url="http://big/v1", model="m", max_retries=0)
+    )
+    with respx.mock:
+        respx.post("http://big/v1/chat/completions").respond(
+            503, json={"error": {"message": "Loading model"}}
+        )
+        with pytest.raises(ModelUnavailableError):
+            await llm.chat(ChatRequest(messages=[Message.user("hi")]))
+    await llm.aclose()

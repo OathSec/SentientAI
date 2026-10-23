@@ -18,6 +18,7 @@ compartment. Text stored as shared memory has other people's names removed.
 from __future__ import annotations
 
 import random
+import re
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -107,6 +108,28 @@ _NOTE_KINDS = [MemoryKind.CONVERSATION, MemoryKind.FACT, MemoryKind.SUMMARY]
 
 def _text(value: Any, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
+
+
+def _words_of(text: str) -> list[str]:
+    swap = {"your": "my", "you": "i", "yourself": "myself", "you're": "i'm"}
+    words = re.findall(r"[a-z']+", text.split("(")[0].casefold())
+    return [swap.get(w, w) for w in words]
+
+
+def as_option(choice: str, options: list[str]) -> str | None:
+    """Which suggestion a choice names: by name ("research", "research the tides") or by its
+    description in its own words ("Write in my private journal about..." is journal)."""
+
+    said = _words_of(choice)
+    key = "_".join(said)
+    for k in options:
+        if key == k or key.startswith(k + "_"):
+            return k
+    for k in options:
+        described = _words_of(DESCRIPTIONS[k])[:4]
+        if said[: len(described)] == described:
+            return k
+    return None
 
 
 def _same(a: ActivityRecord, b: ActivityRecord) -> bool:
@@ -519,11 +542,9 @@ class Agency:
         if mood:
             await self.emotions.set_mood((await self.redactor.shared())(mood))
         raw_choice = _text(data.get("choice"), 40).lower().replace(" ", "_")
-        # An option by name ("research", "research_the_tides"); anything else is its own idea.
-        kind = next((k for k in options if k == raw_choice), None) or next(
-            (k for k in options if raw_choice.startswith(k + "_")), None
-        )
         own = _text(data.get("choice"), 2000)
+        # A suggestion by name or in its own words; anything else is its own idea.
+        kind = as_option(own, options)
         unavailable = next((k for k in DESCRIPTIONS if k == raw_choice), None)
         if kind is None and unavailable:
             await self._record(

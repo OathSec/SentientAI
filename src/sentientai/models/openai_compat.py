@@ -132,10 +132,16 @@ class OpenAICompatibleClient:
         for attempt in range(attempts):
             try:
                 response = await self._http.post("/chat/completions", json=payload)
+                # 502/503/504: the server is there but not ready ("Loading model" while it starts
+                # after a restart or a picture). That is unavailability, which the router waits
+                # out, not a broken request.
+                error_type = (
+                    ModelUnavailableError if response.status_code in (502, 503, 504) else ModelError
+                )
                 if response.status_code in _RETRYABLE_STATUS and attempt < attempts - 1:
-                    last_error = ModelError(f"{self.name}: HTTP {response.status_code}")
+                    last_error = error_type(f"{self.name}: HTTP {response.status_code}")
                 elif response.status_code >= 400:
-                    raise ModelError(
+                    raise error_type(
                         f"{self.name}: HTTP {response.status_code}: {response.text[:500]}"
                     )
                 else:
