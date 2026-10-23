@@ -111,6 +111,9 @@ services:
       # How long after the last picture the paused server is started again. With one model on
       # both cards (profile `bigmodel`) that model is Fuzzy's only one: keep it short (e.g. 5).
       SENTIENT_IMAGES__SWAP_GRACE_S: ${IMAGE_SWAP_GRACE_S:-60}
+      # Where the Compute page sends people to download the Windows worker program.
+      SENTIENT_WORKERS__DOWNLOAD_URL: ${WORKER_DOWNLOAD_URL:-}
+      SENTIENT_WORKERS__CHAT_MODEL: ${WORKER_CHAT_MODEL:-qwen3:14b}
       SENTIENT_IMAGES__TIMEOUT_S: ${IMAGE_TIMEOUT_S:-900}
       SENTIENT_SAFETY__AUDIT_HMAC_KEY: ${SENTIENT_AUDIT_KEY:?set SENTIENT_AUDIT_KEY in deploy/.env}
       # Where each tier's model server is. The defaults are the two servers below; for the

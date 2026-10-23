@@ -84,6 +84,7 @@ class App:
         s.configure(
             "Card.TFrame", background=PANEL, relief="solid", borderwidth=1, bordercolor=LINE
         )
+        s.configure("Inner.TFrame", background=PANEL, borderwidth=0, relief="flat")
         s.configure("TLabel", background=BG, foreground=INK)
         s.configure("Card.TLabel", background=PANEL)
         s.configure("Muted.TLabel", background=PANEL, foreground=MUTED)
@@ -118,7 +119,7 @@ class App:
     def _card(self, parent: tk.Misc, number: str, title: str) -> tuple[ttk.Frame, ttk.Label]:
         frame = ttk.Frame(parent, style="Card.TFrame", padding=14)
         frame.pack(fill="x", pady=(0, 12))
-        head = ttk.Frame(frame, style="Card.TFrame")
+        head = ttk.Frame(frame, style="Inner.TFrame")
         head.pack(fill="x")
         badge = ttk.Label(head, text=number, style="Title.TLabel", foreground=MUTED, width=2)
         badge.pack(side="left")
@@ -152,7 +153,7 @@ class App:
         card, self.badge1 = self._card(f, "1", "Link to your Fuzzy account")
         self.link_note = ttk.Label(card, style="Muted.TLabel", wraplength=560, justify="left")
         self.link_note.pack(anchor="w", pady=(6, 6))
-        self.link_row = ttk.Frame(card, style="Card.TFrame")
+        self.link_row = ttk.Frame(card, style="Inner.TFrame")
         self.link_row.pack(fill="x")
         self.code = tk.StringVar()
         ttk.Entry(self.link_row, textvariable=self.code).pack(side="left", fill="x", expand=True)
@@ -169,7 +170,7 @@ class App:
         self.gpu_label.pack(anchor="w", pady=(6, 0))
         self.why_label = ttk.Label(card, style="Muted.TLabel", wraplength=560, justify="left")
         self.why_label.pack(anchor="w")
-        row = ttk.Frame(card, style="Card.TFrame")
+        row = ttk.Frame(card, style="Inner.TFrame")
         row.pack(fill="x", pady=8)
         ttk.Label(row, text="Model", style="Card.TLabel").pack(side="left")
         self.model = tk.StringVar(value="qwen3:8b")
@@ -268,7 +269,7 @@ class App:
         self.log.pack(fill="both", expand=True)
 
     def _field(self, parent: tk.Misc, label: str, value: str) -> tk.StringVar:
-        row = ttk.Frame(parent, style="Card.TFrame")
+        row = ttk.Frame(parent, style="Inner.TFrame")
         row.pack(fill="x", pady=2)
         ttk.Label(row, text=label, style="Card.TLabel").pack(side="left")
         var = tk.StringVar(value=value)
