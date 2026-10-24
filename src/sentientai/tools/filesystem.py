@@ -284,9 +284,22 @@ class FsWrite(_FsTool[FsWriteArgs]):
             raise ToolError(f"{args.path!r} is a directory")
         if args.mode == "create" and path.exists():
             raise ToolError(f"{args.path!r} already exists; use mode='overwrite' or fs_edit")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a" if args.mode == "append" else "w", encoding="utf-8") as fh:
-            fh.write(args.content)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a" if args.mode == "append" else "w", encoding="utf-8") as fh:
+                fh.write(args.content)
+        except FileExistsError:
+            # A file already sits where a folder is needed: say which, so the next try can differ.
+            blocker = next(
+                (p for p in [path.parent, *path.parent.parents] if p.exists() and not p.is_dir()),
+                path.parent,
+            )
+            raise ToolError(
+                f"{self.ws.relative(blocker)!r} is a file, not a folder, so nothing can be "
+                f"written inside it; choose another folder name"
+            ) from None
+        except OSError as exc:
+            raise ToolError(f"couldn't write {args.path!r}: {exc.strerror or exc}") from None
         return ToolResult.success(
             f"wrote {len(args.content)} chars to {self.ws.relative(path)} ({args.mode})"
         )

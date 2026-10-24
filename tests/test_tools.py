@@ -110,6 +110,9 @@ async def test_filesystem_tools(ws: Workspace) -> None:
         await call("fs_write", path="out/new.txt", content="b")
     await call("fs_write", path="out/new.txt", content="b", mode="append")
     assert (ws.primary / "out/new.txt").read_text() == "ab"
+    # A file where a folder is needed is a plain, explained failure, not a crash.
+    with pytest.raises(ToolError, match="is a file, not a folder"):
+        await call("fs_write", path="out/new.txt/inner.txt", content="x")
 
     diff = await call("fs_edit", path="src/app.py", old="'hello'", new="'world'")
     assert "-    return 'hello'" in diff.output and "+    return 'world'" in diff.output
