@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compute</title>
+<link rel="icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top" id="top"></header>
+<main class="wide">
+  <h1>Compute</h1>
+  <p class="muted">Computers that lend their graphics cards to Fuzzy. Each one belongs to a person's account, so you can see what you have contributed.</p>
+  <section class="card" id="get">
+    <div class="row spread">
+      <div><h2>Get the Fuzzy Worker</h2><p class="small muted nomargin">A small program that lends your graphics card to Fuzzy. It sets everything up for you.</p></div>
+      <div class="row"><a class="button" id="dl-win" href="https://systembridge.site/downloads/FuzzyWorker.exe" download>Download for Windows</a><a class="button secondary" id="dl-linux" href="https://systembridge.site/downloads/FuzzyWorker-linux.bin" download>Linux</a></div>
+    </div>
+  </section>
+  <section id="tiles" class="tiles" aria-label="Pool summary"></section>
+  <div class="grid">
+    <section class="card" id="mine-card">
+      <div class="row spread"><h2>Your computers</h2><button class="primary" id="add">Add a computer</button></div>
+      <div id="mine-totals" class="stats"></div>
+      <div id="linker" class="linker hidden"></div>
+      <div id="mine"></div>
+    </section>
+    <section class="card">
+      <h2>Top contributors</h2>
+      <ol id="leaders" class="leaders"></ol>
+      <p class="small muted">Ranked by time spent working for Fuzzy.</p>
+    </section>
+  </div>
+  <section class="card">
+    <h2>The pool right now</h2>
+    <p class="small muted">Every graphics card Fuzzy can use at this moment: its home server's, plus lent ones.</p>
+    <div id="pool" class="gpus"></div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+<script src="/static/compute.js"></script>
+</body>
+</html>

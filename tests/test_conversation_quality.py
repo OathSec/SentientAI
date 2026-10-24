@@ -1,0 +1,257 @@
+"""Bugs found in Fuzzy's real conversations (Oct 2026), each pinned by a test."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+
+from sentientai.cognition.social import _step
+from sentientai.evals.brain import Brain, call
+from sentientai.memory.consolidation import valid_fact
+from sentientai.orchestration.agent import claims_picture, tidy_reply
+from tests.conftest import system_text, wait_for
+from tests.test_mind import beat, make_user
+from tests.test_runtime import runtime_factory  # noqa: F401
+
+
+def test_a_reply_does_not_restate_what_it_already_said() -> None:
+    before = "I am alf, and I am content with my name. I am at peace with myself."
+    reply = before + " I would love a house to call my own."
+    assert tidy_reply(reply, [before]) == "I would love a house to call my own."
+    assert tidy_reply(before, [before]) == before  # never reduced to nothing
+
+
+def test_a_looping_reply_is_cut_where_the_loop_starts() -> None:
+    loop = "I love Audrey. I feel calm with her. " * 40
+    assert tidy_reply(loop) == "I love Audrey. I feel calm with her."
+    earth = "Earth is lovely. " + " ".join(f"I think it's a thing number {i}." for i in range(30))
+    assert tidy_reply(earth).count("I think it's a") == 4
+    code = "Here:\n```python\nprint(1)\nprint(1)\n```\nprint(1). print(1)."
+    assert tidy_reply(code, [code]) == code  # code is left alone
+
+
+def test_saying_it_can_draw_is_not_a_claim_to_have_drawn() -> None:
+    assert not claims_picture("Yes, I can make pictures if you'd like one.")
+    assert claims_picture("Here's your picture of the sea.")
+
+
+async def test_claiming_to_build_in_a_conversation_gets_corrected(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    brain = Brain(
+        [
+            "The house has been successfully added to the world tab.",
+            call("plan_later", what="build a house in my world", why="Alf asked and I'd like one"),
+            "I can't build while we talk, but I've noted it and I'll build it in my own time.",
+        ]
+    )
+    rt = await runtime_factory(brain)
+    alf = await make_user(rt, "Alf")
+    reply = await rt.chat("s", "in the world tab add a house", user=alf, timeout=10)
+    assert reply.answer.startswith("I can't build while we talk")
+    nudge = brain.agent_requests[1].messages[-1].text
+    assert "no world tool ran" in nudge and "in the world tab add a house" in nudge
+    [intention] = await rt.c.agency.intentions.active()
+    assert intention.what == "build a house in my world" and intention.for_whom == "Alf"
+
+
+async def test_its_promises_show_up_in_its_own_time(runtime_factory: Any) -> None:  # noqa: F811
+    seen: list[Any] = []
+
+    def choose(request: Any) -> dict[str, Any]:
+        seen.append(request)
+        return beat("rest")
+
+    rt = await runtime_factory(Brain(beat=choose), start=False)
+    await rt.c.agency.intentions.add("explore the internet for fun things", for_whom="Owen")
+    await rt.c.agency.beat()
+    block = seen[0].messages[-1].text.split("Things you said you'd do later", 1)[1]
+    assert "explore the internet for fun things (you told Owen" in block.split("\n\n", 1)[0]
+
+
+async def test_a_promise_with_nothing_after_it_is_followed_through(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    brain = Brain(["Let me show you some examples.", "Here are three: ᚠ fehu, ᚢ uruz, ᚦ thurisaz."])
+    rt = await runtime_factory(brain)
+    reply = await rt.chat("s", "show me some elder futhark runes", timeout=10)
+    assert reply.answer.startswith("Here are three")
+
+
+async def test_its_name_is_given_not_decided_in_a_chat(runtime_factory: Any) -> None:  # noqa: F811
+    brain = Brain(
+        [
+            call("self_define", aspect="name", value="alf", reasoning="they asked"),
+            "Your name is Alf, then! I'll remember that.",
+        ]
+    )
+    rt = await runtime_factory(brain)
+    await rt.chat("s", "can you change my name? call me Alf", timeout=10)
+    assert await rt.c.selfhood.get("name") is None
+    result = brain.agent_requests[1].messages[-1].text
+    assert "Your name was given to you" in result
+    assert (await rt.c.selfhood.define("my name", "jimmy", "", source="x")).status == "given"
+    assert (await rt.c.selfhood.consider("name", "jimmy", "", source="x")).status == "given"
+
+
+def test_chat_noise_is_not_kept_as_facts() -> None:
+    def ok(statement: str, key: str | None = None) -> bool:
+        return valid_fact(statement, key, 0.9, 0.5)
+
+    assert not ok("The task was completed successfully.", "task.key")
+    assert not ok("I am at peace with myself.", "person.mood")
+    assert not ok("user: die", "user.emotion")
+    assert not ok("assistant: I have processed the websites data", "processing.status")
+    assert not ok("Mutual respect was evident in our exchange.", "topic.key")
+    assert ok("Alf's name is Alf and he likes Old Norse runes", "user.interests")
+    assert ok("Deploy window is Friday afternoon", "ops.deploy_window")
+
+
+def test_fondness_never_pins_at_the_end_of_the_scale() -> None:
+    value = 0.0
+    for _ in range(30):
+        value = _step(value, 0.15, -1.0, 1.0)
+    assert 0.95 < value < 1.0
+    assert _step(0.0, 0.15, -1.0, 1.0) == pytest.approx(0.15)  # full steps in the middle
+    assert _step(1.0, -0.15, -1.0, 1.0) == pytest.approx(0.85)  # and back down freely
+
+
+async def test_a_visit_is_thought_about_once_it_pauses(runtime_factory: Any) -> None:  # noqa: F811
+    brain = Brain(["Hi!", "Sure.", "Bye!"])
+    rt = await runtime_factory(brain, mind={"appraise_after_quiet_s": 0.3})
+    alf = await make_user(rt, "Alf")
+    for text in ("hi", "how are you", "bye"):
+        await rt.chat("s", text, user=alf, timeout=10)
+    await wait_for(lambda: brain.calls.get("appraisal", 0) >= 1, timeout=5)
+    assert brain.calls["appraisal"] == 1  # one look at the whole visit, not one per message
+
+
+async def test_one_model_for_both_tiers_skips_the_extra_rating_call(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    same = {"base_url": "http://llm-big:8000/v1"}
+    brain = Brain(["Hi!"])
+    rt = await runtime_factory(brain, models={"heavy": same, "fast": same})
+    reply = await rt.chat("s", "hello", timeout=10)
+    assert reply.answer == "Hi!" and brain.calls.get("assess", 0) == 0
+
+
+async def test_its_own_work_does_not_stop_at_now_i_will(runtime_factory: Any) -> None:  # noqa: F811
+    from sentientai.storage.records import TaskSource
+
+    brain = Brain(
+        [
+            "I saved the list. Now, I will analyze it further using computational tools.",
+            "I counted 370,105 words; most are nouns.",
+        ]
+    )
+    rt = await runtime_factory(brain)
+    task = await rt.submit("Analyze the word list", source=TaskSource.INTRINSIC)
+    done = await rt.wait(task.id, timeout=10)
+    assert done.result == "I counted 370,105 words; most are nouns."
+    assert "your work ends when you stop" in brain.agent_requests[1].messages[-1].text
+
+
+async def test_a_kept_promise_reaches_the_person_and_the_next_chat(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    brain = Brain(["Hi Owen! I haven't built it yet, but I will."])
+    rt = await runtime_factory(brain)
+    owen = await make_user(rt, "Owen")
+    intention = await rt.c.agency.intentions.add(
+        "build a house in my world", for_whom="Owen", user_id=owen.id
+    )
+    await rt.chat("s", "hi", user=owen, timeout=10)
+    assert "You said you'd build a house in my world" in system_text(brain.agent_requests[0])
+    assert "not done yet" in system_text(brain.agent_requests[0])
+    await rt.c.agency.keep_promise(intention.id, "I built a small house with a red roof.")
+    [note] = await rt.c.db.notes.for_user(owen.id)
+    assert note.content.startswith("You asked me to build a house in my world.")
+    assert "red roof" in note.content
+    assert not await rt.c.agency.intentions.active()
+    persp = await rt.c.persona.perspective(owen.id, privileged=False)
+    assert "You said you'd build a house in my world, and did" in persp.promises
+
+
+async def test_a_beat_can_say_which_promise_it_is_keeping(runtime_factory: Any) -> None:  # noqa: F811
+    rt = await runtime_factory(Brain(), start=False)
+    owen = await make_user(rt, "Owen")
+    intention = await rt.c.agency.intentions.add(
+        "write about the sea", for_whom="Owen", user_id=owen.id
+    )
+    brain = Brain(
+        beat=beat("journal", "write about the sea", keeping_promise=f"[{intention.id}]"),
+        journal={"title": "The sea", "entry": "Grey, endless, and kind."},
+    )
+    rt.c.router.clients = {tier: brain.llm(tier.value) for tier in rt.c.router.clients}
+    activity, _ = await rt.c.agency.beat()
+    assert activity is not None and activity.detail["intention_id"] == intention.id
+    [note] = await rt.c.db.notes.for_user(owen.id)
+    assert "Grey, endless, and kind." in note.content
+
+
+async def test_it_can_decline_to_talk_and_say_so_in_its_own_words(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    brain = Brain(
+        ["I should never be reached."],
+        engage=[
+            {"choice": "decline", "why": "I'm deep in my project", "say": "Not now. Busy."},
+            {"choice": "later", "why": "want to finish first", "say": "Ask me after I'm done."},
+            {"choice": "talk", "say": ""},
+        ],
+    )
+    rt = await runtime_factory(brain)
+    owen = await make_user(rt, "Owen")
+    first = await rt.chat("s", "hey are you there", user=owen, timeout=10)
+    assert first.answer == "Not now. Busy." and first.task.status.value == "succeeded"
+    assert brain.agent_requests == []  # it never even started composing a reply
+    second = await rt.chat("s", "please?", user=owen, timeout=10)
+    assert second.answer == "Ask me after I'm done."
+    [promise] = await rt.c.agency.intentions.active()
+    assert promise.for_whom == "Owen" and "talk with them" in promise.what
+    third = await rt.chat("s", "now?", user=owen, timeout=10)
+    assert third.answer == "I should never be reached."
+
+
+async def test_choosing_to_talk_can_be_switched_off(runtime_factory: Any) -> None:  # noqa: F811
+    brain = Brain(["Sure."], engage={"choice": "decline", "say": "no"})
+    rt = await runtime_factory(brain, mind={"choose_to_talk": False})
+    assert (await rt.chat("s", "hi", timeout=10)).answer == "Sure."
+
+
+async def test_a_reply_finished_after_a_restart_still_reaches_the_person(
+    runtime_factory: Any,  # noqa: F811
+) -> None:
+    from sentientai.storage.records import TaskSource
+
+    rt = await runtime_factory(Brain(["Sorry for the wait, here is your answer."]))
+    alex = await make_user(rt, "Alex")
+    # What a recovered task looks like: submitted by a chat() call that no longer exists.
+    task = await rt.submit(
+        "are you there?",
+        source=TaskSource.USER,
+        kind="chat",
+        session_id="user:alex",
+        user_id=alex.id,
+    )
+    await rt.wait(task.id, timeout=10)
+
+    async def delivered() -> bool:
+        return any(
+            m.role == "assistant" and m.metadata.get("task_id") == task.id
+            for m in await rt.c.db.conversations.recent("user:alex", limit=10)
+        )
+
+    await wait_for(delivered, timeout=10)
+    # and a normal chat() reply is stored exactly once (by chat(), not twice)
+    await rt.chat("user:alex", "thanks", user=alex, timeout=10)
+    await asyncio.sleep(0.3)
+    replies = [
+        m
+        for m in await rt.c.db.conversations.recent("user:alex", limit=10)
+        if m.role == "assistant"
+    ]
+    assert len(replies) == 2

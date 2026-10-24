@@ -1,0 +1,35 @@
+name: Build Fuzzy Worker
+# Builds the worker program for Windows, macOS and Linux. Run it by hand (Actions tab), or push a
+# tag like worker-v1.0.0 to also attach the files to a GitHub release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["worker-v*"]
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - {os: windows-latest, name: FuzzyWorker-windows, path: worker/dist/FuzzyWorker.exe}
+          - {os: macos-14, name: FuzzyWorker-macos, path: worker/dist/FuzzyWorker.app}
+          - {os: ubuntu-22.04, name: FuzzyWorker-linux, path: worker/dist/FuzzyWorker}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Build
+        shell: bash
+        working-directory: worker
+        run: |
+          python -m venv .buildenv
+          if [ -d .buildenv/Scripts ]; then . .buildenv/Scripts/activate; else . .buildenv/bin/activate; fi
+          pip install -r requirements.txt pyinstaller
+          pyinstaller --noconfirm --onefile --windowed --name FuzzyWorker --paths . --collect-submodules fuzzy_worker fuzzy_worker/__main__.py
+      - name: Pack the Mac app
+        if: runner.os == 'macOS'
+        run: cd worker/dist && ditto -c -k --keepParent FuzzyWorker.app FuzzyWorker-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ runner.os == 'macOS' && 'worker/dist/FuzzyWorker-macos.zip' || matrix.path }}

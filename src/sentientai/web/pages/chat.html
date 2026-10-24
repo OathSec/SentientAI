@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat</title>
+<link rel="icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="fill">
+<header class="top" id="top"></header>
+<main>
+  <div id="notes"></div>
+  <div class="chatbar">
+    <p id="mood" class="muted small nomargin grow"></p>
+    <button class="secondary small hidden" id="earlier">Earlier messages</button>
+  </div>
+  <div id="log" aria-live="polite"></div>
+  <div id="composer">
+    <div id="status"></div>
+    <form id="form">
+      <label for="text" class="hidden">Message</label>
+      <textarea id="text" maxlength="4000" placeholder="Write to Fuzzy" rows="2"></textarea>
+      <p class="row spread tight">
+        <span class="small muted" id="limits"></span>
+        <button type="submit" id="send">Send</button>
+      </p>
+    </form>
+  </div>
+</main>
+<script src="/static/app.js"></script>
+
+<script src="/static/chat.js"></script>
+</body>
+</html>

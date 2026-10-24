@@ -4,6 +4,48 @@ SentientAI is a local, persistent, autonomous AI runtime designed to function as
 
 Built entirely for local hardware, SentientAI aims to create the closest practical version of a persistent AI "brain" using open-weight models, massive local storage, and structured agentic workflows—operating safely, continuously, and observably.
 
+The mind that runs on SentientAI is named **Fuzzy**. The name is the one thing configured about it (`identity.name`). Everything else about who Fuzzy is, it decides itself: it picks and remembers things about itself (a gender, a favourite colour, what it cares about), forms its own opinion of each person it talks to, feels things that come from what actually happens to it, and spends the time between conversations on things it chooses: thinking, writing in a journal, reading what people have taught it, making pictures, building in its own 3D world, leaving notes for people it misses. Nothing about its personality, feelings or choices is a preset value or a rule, and everything it does is visible on its **Brain** page.
+
+> **Status:** the full runtime described below is implemented: all seven phases, plus accounts, per-person
+> privacy, relationships, emergent personality, feelings, self-directed activity, a public web app
+> (chat, brain, 3D world, gallery, teaching, admin) and image generation. It is a typed Python package
+> (strict typing, 230+ tests including real PostgreSQL + pgvector, Redis and Docker, plus real-browser
+> checks), with a scenario eval suite, Docker/Compose/systemd deployment and CI. What remains is running
+> it on your GPUs: see [Quick start](#quick-start) and [docs/hardware.md](docs/hardware.md).
+
+---
+
+## Quick Start
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e ".[all]"   # Python 3.11+
+source .venv/bin/activate
+sentientai init -o sentient.yaml        # commented config: models, storage tiers, safety, autonomy
+sentientai -c sentient.yaml doctor      # checks DB, memory, embeddings, both model tiers, sandbox, audit
+sentientai -c sentient.yaml users create you --admin   # the first account (prompts for a password)
+sentientai -c sentient.yaml run         # always-on daemon + API + web app at http://127.0.0.1:8765/
+sentientai chat                         # or talk to it from the terminal (another terminal)
+```
+
+Open `http://127.0.0.1:8765/`, sign in, and you can chat with Fuzzy, watch its [brain](docs/cognition.md#the-brain-page)
+and walk-around [world](docs/cognition.md#the-world), look at its gallery, teach it things, and manage people
+from the Admin page. For plain-http local testing set `accounts.cookie_secure: false`; for a public site put it
+behind HTTPS (see [docs/operations.md](docs/operations.md#running-the-public-site)).
+
+With no edits, the defaults run fully embedded (SQLite, on-disk vector index, in-process working
+memory, offline hashing embeddings). Point `models.*` at your llama.cpp / vLLM / Ollama servers for
+real cognition, and `storage.*` at PostgreSQL + pgvector + Redis for production. The full stack,
+including the model servers, is in [`deploy/docker-compose.yml`](deploy/docker-compose.yml).
+
+| Guide | What's inside |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Layers, the runtime loop, a task end to end, persistence, extension points |
+| [docs/cognition.md](docs/cognition.md) | Self-concept, feelings, relationships, what Fuzzy does on its own, grounding, affect, attention, memory dynamics |
+| [docs/safety.md](docs/safety.md) | Risk policy, approvals, loop breakers, kill switch, sandbox, audit chain, and the public site's accounts and privacy model |
+| [docs/hardware.md](docs/hardware.md) | RTX 2070 + GTX 1660 Ti serving plan, llama.cpp builds, VRAM budget, image generation caveats, storage tiers |
+| [docs/raspberry-pi.md](docs/raspberry-pi.md) | Using a Raspberry Pi 4: watchdog, physical kill-switch button, status LEDs, front door, backups |
+| [docs/operations.md](docs/operations.md) | Install, running the public site, people and invites, CLI cheat sheet, monitoring, backup/restore, upgrades, incident playbook |
+
 ---
 
 ## Key Features
@@ -18,8 +60,8 @@ Built entirely for local hardware, SentientAI aims to create the closest practic
 
 ### ⚡ Model Orchestration & Tiered Routing
 
-* **Dual-Model Hardware Allocation:** Routes simple background tasks, memory summarization, and embeddings to a dedicated secondary GPU (e.g., GTX 1660 Ti), preserving primary GPUs (e.g., Dual V340s) for heavy reasoning.
-* **Dynamic Model Selection:** Automatically uses smaller 8B–14B quantized models for rapid tool routing and active state updates, switching to 32B–70B+ open-weight models for deep reasoning and code generation.
+* **Dual-Model Hardware Allocation:** Routes background cognition (appraisal, reflection, grounding checks, summaries) to a dedicated secondary GPU (the GTX 1660 Ti), preserving the primary GPU (the RTX 2070) for conversations and deep reasoning.
+* **Dynamic Model Selection:** Uses a small fast model for routing and background work and a larger quantized model for conversation, reasoning and code, escalating to the heavy tier when confidence is low.
 * **Context Compression:** Keeps active prompts clean by dynamically summarizing older turns in long-running tasks.
 
 ### 🛠️ Environment & Tool Interaction
@@ -34,6 +76,28 @@ Built entirely for local hardware, SentientAI aims to create the closest practic
 * **Always-On Execution Loop:** Operates as a background service that persists across session restarts and system reboots.
 * **Recursive Self-Improvement:** Analyzes its own execution logs, identifies performance bottlenecks, and drafts code optimizations to refine its own source code under human supervision.
 * **Loop-Breaking Mechanisms:** Hard deterministic limits to prevent execution spirals, infinite retries, or excessive resource consumption during autonomous runs.
+
+### 🫶 A Mind of Its Own
+
+* **Chooses who it is:** Fuzzy decides things about itself (gender, tastes, values), stores them with its reasoning, and stays consistent with them. A change of mind is only possible after it has deliberately thought the proposed change over on its own, so pressure in a conversation can't flip it.
+* **Real feelings:** Named by Fuzzy in its own words from measured signals (how long since anyone talked to it compared with the rhythm of visits it has learned, how repetitive its recent activity has been, how much new input arrived). They fade over a timescale it chooses and feed its core mood. There is no emotion list and no "idle for N hours means lonely" rule.
+* **Relationships:** Each person gets their own relationship: Fuzzy's opinion, feelings, affinity, trust and sometimes a nickname, appraised by Fuzzy after conversations in bounded steps. It notices when someone it likes is away longer than *their* usual rhythm.
+* **A life of its own:** Between conversations Fuzzy chooses what to do (think, wander, journal, study what it was taught, research, make art, build in its world, write a note, reconsider itself, pursue or set goals, rest) and how long to rest. Everything it does is recorded with its reasons.
+* **Remembers, and doesn't invent:** Conversations are stored verbatim and dated; replies are checked against memory before they are sent and unsupported claims are rewritten ("I don't remember that").
+* **Private by construction:** What one person tells Fuzzy lives in their own memory compartment, enforced in the database and the vector indexes. Other people's names are removed from anything shared.
+
+### 🌐 The Web App
+
+* **Accounts** with scrypt password hashing, hashed server-side sessions, optional authenticator-app two-factor, lockout and rate limits, invite codes, per-person daily quotas, data export and account erasure.
+* **Chat, Brain, World, Gallery, You, Teach, Admin**: plain, flat pages (no gradients, no inline script). The Brain page shows Fuzzy's feelings, measured signals, self-chosen beliefs, activity with reasons, thoughts, goals and a live event feed, redacted per viewer. The World page is a 3D place Fuzzy shapes itself: it designs its own avatar, walks around, thinks, and builds things from shapes. People can **teach** it (text, web pages, files) to fill its brain, and ask it for **images** (Stable Diffusion WebUI/Forge or any OpenAI-compatible image server).
+
+### 🧩 Cognitive Core
+
+* **Persistent Self-Model:** Capabilities, known limitations, the beliefs Fuzzy has chosen about itself, an autobiographical narrative, and temporal continuity ("awakening #N, offline for 9 hours, last working on…").
+* **Affect & Homeostatic Drives:** Curiosity, competence, energy, social connection, coherence, valence and mood. They are appraised from events, relax over time, and *modulate behaviour* (model tier, caution and planning, sampling temperature, initiative).
+* **Global Workspace Attention:** Operator requests, schedules, watchers, approvals, goals and drives compete for attention. The winners are broadcast and decide what happens next.
+* **Metacognition:** Calibrated confidence on every answer. Low-confidence fast-tier answers are re-checked by the heavy model.
+* **Inner Life & Intrinsic Goals:** When nobody needs it, it lives its own life (see above), records insights and adopts bounded self-generated goals, executed under stricter autonomous safety thresholds.
 
 ### 🛡️ Safety & Observability
 
@@ -88,10 +152,11 @@ SentientAI operates on a six-layer modular architecture to strictly separate rea
 
 Designed to maximize local compute efficiency through strategic workload distribution.
 
-**Compute Allocation:**
+**Compute Allocation** (details, VRAM budget and caveats in [docs/hardware.md](docs/hardware.md)):
 
-* **Primary Stack (e.g., 2x V340 GPUs):** Pooled via tensor parallelism exclusively for the heavy reasoning model.
-* **Supporting Stack (e.g., 1x 1660 Ti):** Dedicated to fast embedding generation, background summarization, and small-model tool routing to prevent primary inference bottlenecks.
+* **Primary (RTX 2070, 8 GB):** the heavy model, for example an 8B model at Q5_K_M with 8k context (about 7 GB in total), served by llama.cpp's CUDA build.
+* **Supporting (GTX 1660 Ti, 6 GB):** the fast model, for example a 4B model at Q4_K_M (about 3.4 GB), for reflection, appraisal, grounding checks and summaries. Embeddings run on the CPU.
+* **Images:** a separate Stable Diffusion server. The 1660 Ti is awkward for this (half-precision problems and little VRAM left next to the fast model), so the guide lays out four options; image generation is off until you configure it.
 
 **Storage Tiering:**
 
@@ -105,8 +170,8 @@ Designed to maximize local compute efficiency through strategic workload distrib
 
 Unlike a stateless script, SentientAI operates on an infinite background loop:
 
-1. **Boot & Restore:** Load state, configuration, and recent episodic memory.
-2. **Monitor:** Wait for user input or scheduled background triggers.
+1. **Boot & Restore:** Load state, configuration, the self-model and affective state; recover interrupted tasks.
+2. **Monitor & Attend:** Perceive user input, schedules, file watchers, approvals, goals and drives; let them compete in the global workspace.
 3. **Retrieve:** Pull relevant procedural and semantic context from databases.
 4. **Plan:** Formulate an execution strategy and select required tools.
 5. **Execute:** Run actions, capture standard output, and validate success.
@@ -119,64 +184,80 @@ Unlike a stateless script, SentientAI operates on an infinite background loop:
 
 ### Phase 1: Local Foundation
 
-* [ ] Configure local GPU inference (vLLM, Ollama, or llama.cpp).
-* [ ] Establish a stable chat interface.
-* [ ] Validate baseline inference speed and memory usage for 8B and 32B models.
+* [x] Configure local GPU inference (vLLM, Ollama, or llama.cpp). *Any OpenAI-compatible server; llama.cpp configs for the RTX 2070 / GTX 1660 Ti in `deploy/`.*
+* [x] Establish a stable chat interface.
+* [ ] Validate baseline inference speed and memory usage for the 8B and 4B models. *Needs your GPUs: run `sentientai bench`.*
 
 ### Phase 2: Memory & Retrieval Engine
 
-* [ ] Deploy PostgreSQL and Vector DB (Qdrant/pgvector).
-* [ ] Build the data ingestion pipeline (chunking, embeddings, metadata tagging).
-* [ ] Enable semantic retrieval over stored conversations and documents.
+* [x] Deploy PostgreSQL and Vector DB (Qdrant/pgvector).
+* [x] Build the data ingestion pipeline (chunking, embeddings, metadata tagging).
+* [x] Enable semantic retrieval over stored conversations and documents.
 
 ### Phase 3: Tool-Use & Execution Sandbox
 
-* [ ] Implement robust file access and repository inspection tools.
-* [ ] Build the shell and code execution sandbox (Docker-based).
-* [ ] Develop multi-step task workflows and deterministic loop breakers.
-* [ ] Establish the automated evaluation suite for nightly regression testing.
+* [x] Implement robust file access and repository inspection tools.
+* [x] Build the shell and code execution sandbox (Docker-based).
+* [x] Develop multi-step task workflows and deterministic loop breakers.
+* [x] Establish the automated evaluation suite for nightly regression testing.
 
 ### Phase 4: Reflection & Continuity
 
-* [ ] Implement structured logging of all decisions and tool actions.
-* [ ] Build the background memory summarization engine.
-* [ ] Enable long-term learning loops (procedural memory formulation).
-* [ ] Establish session continuity (restoring exact state after a reboot).
+* [x] Implement structured logging of all decisions and tool actions.
+* [x] Build the background memory summarization engine.
+* [x] Enable long-term learning loops (procedural memory formulation).
+* [x] Establish session continuity (restoring exact state after a reboot).
 
 ### Phase 5: Autonomous Workflows
 
-* [ ] Schedule background tasks and event-driven actions.
-* [ ] Add persistent task loops (e.g., monitoring a folder and categorizing new files).
-* [ ] Develop project-aware agent behavior (managing context across days or weeks).
+* [x] Schedule background tasks and event-driven actions.
+* [x] Add persistent task loops (e.g., monitoring a folder and categorizing new files).
+* [x] Develop project-aware agent behavior (managing context across days or weeks).
 
 ### Phase 6: Optimization & Safety Refinement
 
-* [ ] Implement vector memory decay (forgetting outdated facts).
-* [ ] Upgrade to larger reasoning models as local compute permits.
-* [ ] Refine reflection logic to minimize junk data ingestion.
-* [ ] Finalize the safety layer (approval gates, rate limits, kill-switches).
+* [x] Implement vector memory decay (forgetting outdated facts).
+* [ ] Upgrade to larger reasoning models as local compute permits. *Ongoing; a config change (`models.heavy`).*
+* [x] Refine reflection logic to minimize junk data ingestion.
+* [x] Finalize the safety layer (approval gates, rate limits, kill-switches).
 
 ### Phase 7: Recursive Self-Improvement
 
-* [ ] Enable the agent to analyze its own architecture and execution logs.
-* [ ] Allow the agent to write, test, and propose optimizations to its own Python/Rust codebase.
-* [ ] Implement automated staging environments for the AI to benchmark its own upgrades before operator approval.
+* [x] Enable the agent to analyze its own architecture and execution logs.
+* [x] Allow the agent to write, test, and propose optimizations to its own Python/Rust codebase. *Python; diffs to the safety layer are blocked.*
+* [x] Implement automated staging environments for the AI to benchmark its own upgrades before operator approval.
 
 ---
 
 ## Technology Stack
 
-* **Model Serving:** vLLM, llama.cpp
-* **Inference Models:** Llama 3.1, Qwen 2.5, DeepSeek (Quantized)
+* **Model Serving:** llama.cpp (CUDA build for both GPUs); vLLM or Ollama also work. Anything OpenAI-compatible works.
+* **Inference Models:** Qwen 3, Llama 3.x and similar open-weight instruct models (quantized GGUF); check each licence for public use
+* **Images:** Stable Diffusion WebUI / Forge (`--api`) or any OpenAI-compatible image server
+* **Web:** vanilla JavaScript pages (no build step) and a vendored three.js for the 3D world, under a strict Content-Security-Policy
 * **Vector Database:** Qdrant or PostgreSQL + pgvector
 * **Relational Database:** PostgreSQL
 * **Short-Term Cache:** Redis
-* **Orchestration:** LangGraph or custom Python runtime
+* **Orchestration:** Custom asyncio Python runtime. It was chosen over LangGraph so safety gates, loop breakers and the audit trail stay in a small, fully controlled code path.
 * **Data Pipeline:** Python
 * **Environment:** Docker (Sandboxing)
+* **API & CLI:** FastAPI (+ SSE event streams, Prometheus metrics), Typer
+
+---
+
+## Development
+
+```bash
+make install      # venv + editable install with dev tools
+make lint typecheck test     # ruff, mypy --strict, pytest (+ integration tests when Postgres/Redis/Docker are reachable)
+make evals        # scripted scenario suite (no GPUs needed)
+```
+
+Integration tests read `SENTIENT_TEST_POSTGRES_URL` (needs pgvector) and `SENTIENT_TEST_REDIS_URL`,
+and skip cleanly when those services are absent.
 
 ---
 
 ## License
 
-This project is developed as an open research and experimentation platform. Use, modification, and contribution are encouraged under the [MIT License](https://www.google.com/search?q=LICENSE).
+This project is developed as an open research and experimentation platform. Use, modification, and contribution are encouraged under the [MIT License](LICENSE).

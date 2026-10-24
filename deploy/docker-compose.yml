@@ -1,0 +1,289 @@
+# SentientAI full stack.
+#
+#   cp deploy/.env.example deploy/.env      # set secrets and model paths
+#   docker compose -f deploy/docker-compose.yml up -d                     # runtime + storage
+#   docker compose -f deploy/docker-compose.yml --profile models up -d    # + local model servers
+#   docker compose -f deploy/docker-compose.yml --profile qdrant --profile search up -d
+#   docker compose -f deploy/docker-compose.yml --profile web up -d      # + Caddy: HTTPS in front of the site
+#
+# Model servers use llama.cpp's CUDA build, one tier per card: the heavy model on the
+# RTX 2070 and the fast model on the GTX 1660 Ti; embeddings run on the CPU.
+# Find each card's index with `nvidia-smi -L` and set HEAVY_GPU / FAST_GPU. See docs/hardware.md.
+
+name: sentientai
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres:
+    <<: *restart
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: sentient
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      POSTGRES_DB: sentientai
+    # More RAM for Fuzzy's memory than Postgres's tiny defaults (raise on a machine with lots).
+    command: >
+      postgres
+      -c shared_buffers=${PG_SHARED_BUFFERS:-1GB}
+      -c effective_cache_size=${PG_CACHE_SIZE:-4GB}
+      -c work_mem=${PG_WORK_MEM:-32MB}
+      -c maintenance_work_mem=${PG_MAINTENANCE_MEM:-256MB}
+    shm_size: 1gb
+    volumes:
+      - ${SSD_PATH:-/srv/sentientai}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentient -d sentientai"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - ${SSD_PATH:-/srv/sentientai}/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  qdrant:
+    <<: *restart
+    profiles: [qdrant]
+    image: qdrant/qdrant:latest   # pin to the server version matching qdrant-client in production
+    volumes:
+      - ${SSD_PATH:-/srv/sentientai}/qdrant:/qdrant/storage
+
+  searxng:
+    <<: *restart
+    profiles: [search]
+    image: searxng/searxng:latest
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-me}
+    volumes:
+      - ./searxng:/etc/searxng
+
+  sentientai:
+    <<: *restart
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: sentientai:latest
+    user: "${SENTIENT_UID:-1000}:${SENTIENT_GID:-1000}"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    environment:
+      SENTIENT_CONFIG: /config/sentient.yaml
+      # Data and workspace live at the SAME absolute path inside and outside the container:
+      # sandbox containers are started by the host daemon, which resolves bind mounts on the host.
+      SENTIENT_STORAGE__DATA_DIR: ${SSD_PATH:-/srv/sentientai}/data
+      SENTIENT_SAFETY__WORKSPACE_ROOTS: '["${WORKSPACE_PATH:-/srv/sentientai/workspace}"]'
+      HOME: /tmp
+      SENTIENT_STORAGE__DATABASE_URL: postgresql+asyncpg://sentient:${POSTGRES_PASSWORD}@postgres:5432/sentientai
+      SENTIENT_STORAGE__REDIS_URL: redis://redis:6379/0
+      SENTIENT_STORAGE__VECTOR_BACKEND: pgvector
+      SENTIENT_STORAGE__ARCHIVE_DIR: /archive
+      SENTIENT_API__AUTH_TOKEN: ${SENTIENT_API_TOKEN:?set SENTIENT_API_TOKEN in deploy/.env}
+      # The public site. Cookies are Secure-only by default: serve it over HTTPS (the `web`
+      # profile does), or set SENTIENT_COOKIE_SECURE=false for plain-http testing.
+      SENTIENT_ACCOUNTS__COOKIE_SECURE: ${SENTIENT_COOKIE_SECURE:-true}
+      SENTIENT_ACCOUNTS__HSTS: ${SENTIENT_COOKIE_SECURE:-true}
+      SENTIENT_ACCOUNTS__REGISTRATION: ${SENTIENT_REGISTRATION:-invite}
+      SENTIENT_ACCOUNTS__TRUSTED_PROXIES: '["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]'
+      SENTIENT_IMAGES__BACKEND: ${SENTIENT_IMAGE_BACKEND:-disabled}
+      SENTIENT_IMAGES__BASE_URL: ${SENTIENT_IMAGE_URL:-http://host.docker.internal:7860}
+      # The sandbox Fuzzy runs its own code in. SANDBOX_NETWORK=true lets that code reach the
+      # internet (each such run is then medium risk, so self-started ones wait for your approval
+      # on the Admin page unless you raise autonomous_auto_approve_max_risk). See docs/safety.md.
+      SENTIENT_SANDBOX__NETWORK: ${SANDBOX_NETWORK:-false}
+      # Highest risk Fuzzy's own (self-started) actions may take without asking you: low | medium.
+      SENTIENT_SAFETY__AUTONOMOUS_AUTO_APPROVE_MAX_RISK: ${AUTONOMOUS_AUTO_APPROVE:-low}
+      SENTIENT_SANDBOX__MEMORY: ${SANDBOX_MEMORY:-4g}
+      SENTIENT_SANDBOX__CPUS: ${SANDBOX_CPUS:-4}
+      SENTIENT_SANDBOX__TIMEOUT_S: ${SANDBOX_TIMEOUT_S:-600}
+      # With the `images` profile: pause this model server while a picture is made on its GPU.
+      SENTIENT_IMAGES__SWAP_CONTAINER: ${IMAGE_SWAP_CONTAINER:-}
+      # How long after the last picture the paused server is started again. With one model on
+      # both cards (profile `bigmodel`) that model is Fuzzy's only one: keep it short (e.g. 5).
+      SENTIENT_IMAGES__SWAP_GRACE_S: ${IMAGE_SWAP_GRACE_S:-60}
+      # Where the Compute page sends people to download the Windows worker program.
+      SENTIENT_WORKERS__DOWNLOAD_URL: ${WORKER_DOWNLOAD_URL:-}
+      SENTIENT_WORKERS__CHAT_MODEL: ${WORKER_CHAT_MODEL:-qwen3:14b}
+      SENTIENT_IMAGES__TIMEOUT_S: ${IMAGE_TIMEOUT_S:-900}
+      SENTIENT_SAFETY__AUDIT_HMAC_KEY: ${SENTIENT_AUDIT_KEY:?set SENTIENT_AUDIT_KEY in deploy/.env}
+      # Where each tier's model server is. The defaults are the two servers below; for the
+      # single big-model layout (profile `bigmodel`) point both at http://llm-big:8000/v1.
+      SENTIENT_MODELS__HEAVY__BASE_URL: ${HEAVY_URL:-http://llm-heavy:8000/v1}
+      SENTIENT_MODELS__FAST__BASE_URL: ${FAST_URL:-http://llm-fast:8002/v1}
+      # Per-request context each tier plans for (tokens). Keep at or below the server's own ctx
+      # (--ctx-size, divided by --parallel slots).
+      SENTIENT_MODELS__HEAVY__CONTEXT_WINDOW: ${HEAVY_CTX:-16384}
+      SENTIENT_MODELS__FAST__CONTEXT_WINDOW: ${FAST_CTX:-8192}
+      SENTIENT_MODELS__EMBEDDING__BASE_URL: http://llm-embed:8001/v1
+    volumes:
+      - ./sentient.yaml:/config/sentient.yaml:ro
+      - ${SSD_PATH:-/srv/sentientai}/data:${SSD_PATH:-/srv/sentientai}/data
+      - ${WORKSPACE_PATH:-/srv/sentientai/workspace}:${WORKSPACE_PATH:-/srv/sentientai/workspace}
+      - ${HDD_PATH:-/srv/sentientai}/archive:/archive
+      # Sandbox: sibling containers via the host daemon. The socket is root-equivalent on
+      # the host; only mount it on a machine dedicated to SentientAI (see Dockerfile).
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - ${DOCKER_GID:-999}
+    # Read-only GPU stats (nvidia-smi) for the Server panel: the `utility` capability exposes
+    # temperatures, load and VRAM without giving the container compute access to the cards.
+    # Remove this block on a machine without the NVIDIA container toolkit.
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [utility]}]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach an image server running on the host
+    ports:
+      - "127.0.0.1:${SENTIENT_PORT:-8765}:8765"
+
+  # HTTPS in front of the site (automatic certificates). Set SITE_ADDRESS (a domain name
+  # pointing at this machine) in deploy/.env. Ports 80 and 443 must be reachable.
+  caddy:
+    <<: *restart
+    profiles: [web]
+    image: caddy:2
+    depends_on: [sentientai]
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}   # only used by the `web` profile
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${SSD_PATH:-/srv/sentientai}/caddy/data:/data
+      - ${SSD_PATH:-/srv/sentientai}/caddy/config:/config
+
+  # ------------------------------------------------------------ model servers
+  llm-heavy:
+    <<: *restart
+    profiles: [models, single]
+    image: ${LLAMA_CUDA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    environment:
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["${HEAVY_GPU:-0}"], capabilities: [gpu]}]   # the RTX 2070
+    volumes:
+      - ${MODELS_PATH:-./models}:/models:ro
+    command: >
+      -m /models/${HEAVY_MODEL:-heavy.gguf}
+      --host 0.0.0.0 --port 8000
+      --n-gpu-layers 999 --ctx-size ${HEAVY_CTX_SIZE:-16384} --flash-attn ${FLASH_ATTN:-on}
+      --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${HEAVY_PARALLEL:-1} ${LLAMA_EXTRA:-}
+    # llama.cpp's image checks port 8080 by default; these servers listen on 8000.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
+
+  llm-fast:
+    <<: *restart
+    profiles: [models]
+    image: ${LLAMA_CUDA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    environment:
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["${FAST_GPU:-1}"], capabilities: [gpu]}]   # the GTX 1660 Ti
+    volumes:
+      - ${MODELS_PATH:-./models}:/models:ro
+    command: >
+      -m /models/${FAST_MODEL:-fast.gguf}
+      --host 0.0.0.0 --port 8002
+      --n-gpu-layers 999 --ctx-size ${FAST_CTX_SIZE:-16384} --flash-attn ${FLASH_ATTN:-on}
+      --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${FAST_PARALLEL:-2}
+    # llama.cpp's image checks port 8080 by default; these servers listen on 8002.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
+
+  # One bigger model across BOTH cards (profile `bigmodel`, instead of `models`' two servers):
+  # for example a 14B at Q4_K_M (~9 GB), layer-split over the 2070 and the 1660 Ti. Both of
+  # Fuzzy's tiers then use it (set HEAVY_URL and FAST_URL to http://llm-big:8000/v1, and
+  # HEAVY_CTX / FAST_CTX to half of BIG_CTX_SIZE (BIG_SPLIT follows `nvidia-smi -L` order) because two slots share it). Run it together
+  # with `llm-embed`, but not with llm-heavy / llm-fast. See docs/hardware.md.
+  llm-big:
+    <<: *restart
+    profiles: [bigmodel]
+    image: ${LLAMA_CUDA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    environment:
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["${HEAVY_GPU:-0}", "${FAST_GPU:-1}"], capabilities: [gpu]}]
+    volumes:
+      - ${MODELS_PATH:-./models}:/models:ro
+    command: >
+      -m /models/${BIG_MODEL:-big.gguf}
+      --host 0.0.0.0 --port 8000
+      --n-gpu-layers 999 --split-mode layer --tensor-split ${BIG_SPLIT:-6,8}
+      --ctx-size ${BIG_CTX_SIZE:-24576} --flash-attn ${FLASH_ATTN:-on}
+      --cache-type-k ${KV_TYPE:-q8_0} --cache-type-v ${KV_TYPE:-q8_0} --jinja --parallel ${FAST_PARALLEL:-2} ${LLAMA_EXTRA:-}
+    # llama.cpp's image checks port 8080 by default; these servers listen on 8000.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 600s
+
+  # Image generation on demand (profile `images`): Stable Diffusion on the 1660 Ti, full
+  # precision. Idle, it holds no GPU memory; for each picture Fuzzy pauses the model server on
+  # that card (IMAGE_SWAP_CONTAINER), draws, and restarts it a minute after the last picture.
+  # The model (IMAGE_MODEL, an SD 1.5-class diffusers repo) downloads on first start into
+  # MODELS_PATH/imagegen and is kept in RAM by the OS file cache. See docs/hardware.md.
+  imagegen:
+    <<: *restart
+    profiles: [images]
+    build: ./imagegen
+    image: sentientai-imagegen:latest
+    environment:
+      IMAGE_MODEL: ${IMAGE_MODEL:-Lykon/dreamshaper-8}
+      IMAGE_DEVICE: ${IMAGE_DEVICE:-auto}
+      IMAGE_CPU_THREADS: ${IMAGE_CPU_THREADS:-0}
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["${IMAGE_GPU:-${FAST_GPU:-1}}"], capabilities: [gpu]}]
+    volumes:
+      - ${MODELS_PATH:-./models}/imagegen:/models/hf
+    shm_size: 2gb
+
+  # Embeddings on the CPU: tiny, and it keeps the GPUs' VRAM for the language models.
+  llm-embed:
+    <<: *restart
+    profiles: [models, bigmodel, single]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    volumes:
+      - ${MODELS_PATH:-./models}:/models:ro
+    command: >
+      -m /models/${EMBED_MODEL:-embed.gguf}
+      --host 0.0.0.0 --port 8001
+      --embedding --n-gpu-layers 0 --ctx-size 8192 --batch-size 2048 --ubatch-size 2048
+    # llama.cpp's image checks port 8080 by default; these servers listen on 8001.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s

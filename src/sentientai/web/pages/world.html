@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>World</title>
+<link rel="icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top" id="top"></header>
+<div id="stage">
+  <canvas id="canvas" aria-label="A 3D view of Fuzzy's world"></canvas>
+  <div id="bubble" class="hidden"></div>
+  <div id="side">
+    <div class="sidehead"><button id="sidetoggle" class="secondary" type="button" aria-expanded="true" aria-controls="side">Hide panel</button></div>
+    <div class="card">
+      <h2 id="now"></h2>
+      <p id="thought" class="muted small thoughtbox"></p>
+      <p class="small muted nomargin">Its ground is <span id="size"></span>.</p>
+      <label class="row small nomargin"><input type="checkbox" id="follow" checked> Follow</label>
+    </div>
+    <div class="card">
+      <h2>How it looks</h2>
+      <p id="avatar" class="small"></p>
+    </div>
+    <div class="card">
+      <h2>What it has built</h2>
+      <div id="objects"></div>
+      <div id="picked" class="small mt-xs"></div>
+    </div>
+    <p class="small muted">Drag to look around. Right-drag, Shift+drag or WASD/arrows to move; Q/E to turn; scroll or +/- to zoom; double-click to go to a spot; F to follow Fuzzy again. On a phone: one finger looks, two fingers move and pinch to zoom.</p>
+  </div>
+</div>
+<script src="/static/vendor/three.min.js"></script>
+<script src="/static/app.js"></script>
+<script src="/static/world.js"></script>
+</body>
+</html>

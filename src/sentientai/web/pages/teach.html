@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teach</title>
+<link rel="icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top" id="top"></header>
+<main class="">
+  <h1>Teach</h1>
+  <p class="muted">What you teach goes into Fuzzy's shared knowledge and can come up in anyone's conversation. Don't add anything private.</p>
+  <div id="msg"></div>
+  <div class="grid">
+    <section class="card">
+      <h2>Write or paste</h2>
+      <form id="text-form">
+        <label for="t-title">Title</label><input id="t-title" type="text" maxlength="200" required>
+        <label for="t-text">Text</label><textarea id="t-text" rows="8" required minlength="20"></textarea>
+        <p class="mt-s"><button type="submit">Teach this</button></p>
+      </form>
+    </section>
+    <section class="card">
+      <h2>A web page</h2>
+      <form id="url-form">
+        <label for="u-url">Address</label><input id="u-url" type="url" placeholder="https://" required maxlength="2000">
+        <p class="mt-s"><button type="submit">Fetch and teach</button></p>
+      </form>
+      <h2 class="mt-m">A file</h2>
+      <form id="file-form">
+        <label for="f-file">PDF, text, Markdown, HTML, CSV, code...</label><input id="f-file" type="file" required>
+        <p class="mt-s"><button type="submit">Upload and teach</button></p>
+      </form>
+    </section>
+  </div>
+  <section class="card"><h2>Already taught</h2><div id="docs"></div></section>
+</main>
+<script src="/static/app.js"></script>
+<script src="/static/teach.js"></script>
+</body>
+</html>
