@@ -94,9 +94,11 @@ class BodySignals:
             "(messages and things taught)."
         )
         if self.unread:
+            shown = "; ".join(f"“{t[:70]}”" for t in self.unread[:6])
+            more = f" and {len(self.unread) - 6} more" if len(self.unread) > 6 else ""
             lines.append(
-                f"- Things you were taught and haven't read yet: {len(self.unread)}"
-                f" (newest: {self.unread[0]})."
+                f"- People taught you {len(self.unread)} things you haven't read yet, "
+                f"each one waiting for you: {shown}{more}."
             )
         lines.append(
             f"- Energy {self.energy:.2f}, confidence in your abilities {self.competence:.2f} (0-1)."
