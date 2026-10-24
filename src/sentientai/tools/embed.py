@@ -13,7 +13,7 @@ import re
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, ValidationInfo, field_validator
 
 from sentientai.tools.base import Tool, ToolArgs, ToolContext, ToolResult
 
@@ -59,9 +59,19 @@ def video_embed(url: str) -> tuple[str, str] | None:
 
 
 class ShareArgs(ToolArgs):
+    # A small model often adds a field or runs long; showing the link matters more than the
+    # exact shape of the call, so extras are ignored and wording is trimmed, not rejected.
+    model_config = ConfigDict(extra="ignore")
+
     url: str = Field(min_length=10, max_length=500, description="The address to show.")
-    title: str = Field(min_length=1, max_length=120, description="What it is, in a few words.")
-    note: str = Field(default="", max_length=300, description="Why you're showing it.")
+    title: str = Field(default="", description="What it is, in a few words.")
+    note: str = Field(default="", description="Why you're showing it.")
+
+    @field_validator("title", "note", mode="before")
+    @classmethod
+    def _trim(cls, value: object, info: ValidationInfo) -> str:
+        limit = 120 if info.field_name == "title" else 300
+        return " ".join(str(value or "").split())[:limit]
 
 
 class ShareLink(Tool[ShareArgs]):
@@ -99,7 +109,7 @@ class ShareLink(Tool[ShareArgs]):
         embed: dict[str, Any] = {
             "kind": video[0] if video else "link",
             "url": args.url.strip(),
-            "title": args.title.strip(),
+            "title": args.title.strip() or host.removeprefix("www."),
             "note": args.note.strip(),
             "host": host.removeprefix("www."),
             **({"player": video[1]} if video else {}),
