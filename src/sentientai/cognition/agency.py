@@ -134,10 +134,15 @@ def as_option(choice: str, options: list[str]) -> str | None:
 
 
 def _same(a: ActivityRecord, b: ActivityRecord) -> bool:
-    def key(x: ActivityRecord) -> str:
-        return x.kind + ":" + " ".join(x.intent.casefold().split())
+    """The same choice: same kind, and the same words give or take a rewording. (Matching only
+    the exact text missed a mind that re-chose one errand in new words sixty times.)"""
 
-    return key(a) == key(b)
+    if a.kind != b.kind:
+        return False
+    wa, wb = _words(a.intent), _words(b.intent)
+    if not wa or not wb:
+        return " ".join(a.intent.split()) == " ".join(b.intent.split())
+    return len(wa & wb) / min(len(wa), len(wb)) >= 0.7
 
 
 def _streak(recent: list[ActivityRecord]) -> int:
@@ -497,9 +502,10 @@ class Agency:
         if streak >= 3:
             # A measured fact about itself, like the sameness signal: what it does about it is
             # its own choice. (Small models otherwise copy a long list of identical lines.)
+            span = (recent[0].started_at - recent[streak - 1].started_at).total_seconds()
             self.note(
-                f"You've chosen the same thing {streak} times in a row: "
-                f"{recent[0].kind}: {recent[0].intent[:200]}"
+                f"You've chosen the same thing {streak} times in a row, for "
+                f"{humanize_duration(span)} now: {recent[0].kind}: {recent[0].intent[:200]}"
             )
         feelings = await self.emotions.current(Scope.system())
         # The order of the list is not a preference, but small models favour whatever comes
