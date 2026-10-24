@@ -23,6 +23,7 @@ from sentientai.cognition.intentions import Intentions
 from sentientai.cognition.metacognition import Assessment, Metacognition
 from sentientai.cognition.mind import Mind
 from sentientai.cognition.persona import Persona, Perspective
+from sentientai.cognition.self_model import humanize_duration
 from sentientai.config import Settings
 from sentientai.core.clock import Clock, SystemClock
 from sentientai.core.events import EventBus
@@ -400,7 +401,11 @@ class CognitiveAgent:
                                 person=(perspective.person + "\n")
                                 if perspective and perspective.person
                                 else "",
-                                dialogue="\n".join(f"{t.role}: {t.content[:400]}" for t in dialogue)
+                                dialogue="\n".join(
+                                    f"({humanize_duration(max(0.0, now.timestamp() - t.ts))} ago) "
+                                    f"{t.role}: {t.content[:400]}"
+                                    for t in dialogue
+                                )
                                 or "(nothing yet)",
                                 message=task.goal[:1500],
                             )

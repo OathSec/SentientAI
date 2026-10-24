@@ -441,7 +441,8 @@ How you feel:
 {feelings}
 
 {person}
-Recent messages between you:
+Recent messages between you (with how long ago each was; what you said or felt then may no
+longer be true, so decide from how things are now, not from your earlier replies):
 {dialogue}
 
 Their new message:
