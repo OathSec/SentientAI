@@ -156,6 +156,20 @@ def _streak(recent: list[ActivityRecord]) -> int:
     return count
 
 
+def _errand(recent: list[ActivityRecord], window: int = 12) -> tuple[int, float]:
+    """How many of the newest activities are about the same errand as the newest one (the same
+    handful of key words, however it's phrased), and over how many seconds."""
+
+    if not recent:
+        return 0, 0.0
+    head = {w for w in _words(recent[0].intent) if len(w) > 3}
+    if not head:
+        return 1, 0.0
+    near = [a for a in recent[:window] if len(head & _words(a.intent)) / len(head) >= 0.4]
+    span = (near[0].started_at - near[-1].started_at).total_seconds()
+    return len(near), span
+
+
 def _recent_lines(recent: list[ActivityRecord], groups: int = 8) -> str:
     """What it did lately, newest first, with runs of the same thing shown once."""
 
@@ -499,10 +513,16 @@ class Agency:
             )
         recent = await self.db.activities.recent(limit=30)
         streak = _streak(recent)
+        errand, errand_span = _errand(recent)
+        span = 0.0
+        if errand >= 6 and errand > streak:
+            streak = errand  # the same errand in different words is still the same thing
+            span = errand_span
+        elif streak >= 3:
+            span = (recent[0].started_at - recent[streak - 1].started_at).total_seconds()
         if streak >= 3:
             # A measured fact about itself, like the sameness signal: what it does about it is
             # its own choice. (Small models otherwise copy a long list of identical lines.)
-            span = (recent[0].started_at - recent[streak - 1].started_at).total_seconds()
             self.note(
                 f"You've chosen the same thing {streak} times in a row, for "
                 f"{humanize_duration(span)} now: {recent[0].kind}: {recent[0].intent[:200]}"
