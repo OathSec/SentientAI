@@ -216,6 +216,7 @@ class TaskOutcome:
     grounding: dict[str, object] | None = None
     media: list[str] = field(default_factory=list)
     embeds: list[dict[str, Any]] = field(default_factory=list)  # videos and link cards shown
+    declined: bool = False  # chose not to talk; what it said isn't a reply to learn from
     transcript: list[Message] = field(default_factory=list)
 
     @property
@@ -385,7 +386,13 @@ class CognitiveAgent:
             [f"- right now, in the background: {busy}" if busy else "- nothing in particular"]
             + [f"- earlier: {a.kind}: {a.intent[:160]}" for a in recent if a.user_id is None]
         )
-        dialogue = [t for t in history if t.role in {"user", "assistant"}][-4:]
+        # Its own earlier refusals aren't shown: a mind that reads "I can't now" four times
+        # in a row says it a fifth time whatever has changed since.
+        dialogue = [
+            t
+            for t in history
+            if t.role == "user" or (t.role == "assistant" and not t.metadata.get("declined"))
+        ][-4:]
         who = self.mind.self_model.name
         now = self.clock.now()
         try:
@@ -482,6 +489,7 @@ class CognitiveAgent:
             declined = await self._wants_to_talk(task, perspective, history)
             if declined is not None:
                 outcome.answer = declined
+                outcome.declined = True
                 return
         redact = perspective.redact if perspective else (lambda text: text)
         if task.user_id is not None:

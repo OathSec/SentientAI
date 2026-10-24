@@ -403,11 +403,19 @@ class Runtime:
                     "task_id": final.id,
                     "media": media,
                     "embeds": list(final.metadata.get("embeds") or []),
+                    "declined": bool(final.metadata.get("declined")),
                 },
             )
         )
         await c.memory.add_turn(session_id, "user", text, user_id=user_id)
-        await c.memory.add_turn(session_id, "assistant", answer, task_id=final.id, user_id=user_id)
+        await c.memory.add_turn(
+            session_id,
+            "assistant",
+            answer,
+            task_id=final.id,
+            user_id=user_id,
+            declined=bool(final.metadata.get("declined")),
+        )
         if final.status is TaskStatus.SUCCEEDED:
             # Verbatim, dated record of the exchange so Fuzzy can recall what was actually said.
             when = (final.finished_at or c.clock.now()).strftime("%Y-%m-%d %H:%M UTC")
@@ -742,6 +750,7 @@ class Runtime:
             "grounding": outcome.grounding,
             "media": outcome.media,
             "embeds": outcome.embeds,
+            "declined": outcome.declined,
         }
         await c.db.tasks.save(record)
         c.metrics.tasks.inc(source=task.source.value, status=outcome.status.value)
