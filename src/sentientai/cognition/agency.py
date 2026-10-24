@@ -142,7 +142,7 @@ def _same(a: ActivityRecord, b: ActivityRecord) -> bool:
     wa, wb = _words(a.intent), _words(b.intent)
     if not wa or not wb:
         return " ".join(a.intent.split()) == " ".join(b.intent.split())
-    return len(wa & wb) / min(len(wa), len(wb)) >= 0.7
+    return len(wa & wb) / min(len(wa), len(wb)) >= 0.5
 
 
 def _streak(recent: list[ActivityRecord]) -> int:
